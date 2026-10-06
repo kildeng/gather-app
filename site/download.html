@@ -48,7 +48,7 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-off
 
 .invite{margin-top:14px;background:var(--card);border:1px solid var(--line);border-radius:18px;padding:16px;display:flex;gap:14px;align-items:center}
 .invite .lbl{font-size:12px;font-weight:800;letter-spacing:.6px;color:var(--ink-3)}
-.invite .code{font-size:24px;font-weight:900;letter-spacing:2px;font-variant-numeric:tabular-nums}
+.invite .code{font-size:18px;font-weight:900;letter-spacing:.5px;line-height:1.3;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
 .invite .sub{font-size:13px;color:var(--ink-2)}
 .invite > div{min-width:0;flex:1}
 .mini{font-size:13px;font-weight:700;padding:8px 12px;border-radius:10px;border:1px solid var(--line);background:var(--bg);white-space:nowrap}
@@ -188,7 +188,7 @@ details p{margin:8px 0 2px;color:var(--ink-2);font-size:14.5px}
   const iosSafari = isIOS && /Safari/.test(ua) && !/CriOS|FxiOS|EdgiOS/.test(ua) && !inApp;
   const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
   const params = new URLSearchParams(location.search);
-  const invite = (params.get("invite") || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const invite = (params.get("invite") || "").toUpperCase().replace(/[^A-Z0-9]+/g, "-").replace(/^-+|-+$/g, "");
   const appUrl = new URL("index.html" + (invite ? "?invite=" + invite : ""), location.href).href;
   const pageUrl = location.href;
 
@@ -201,7 +201,7 @@ details p{margin:8px 0 2px;color:var(--ink-2);font-size:14.5px}
   // Invite code from the link a leader shared
   if (invite){
     $("#inviteBox").classList.remove("hidden");
-    $("#inviteCode").textContent = invite.replace(/(.{5})/, "$1 ");
+    $("#inviteCode").textContent = invite;
     $("#copyCode").addEventListener("click", () => copy(invite));
     // keep it for the browser version of the app too
     try { localStorage.setItem("invite", JSON.stringify(invite)); } catch {}

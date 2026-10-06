@@ -223,7 +223,7 @@ main{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;min-height:0}
 .report .quote img{display:block;max-width:180px;border-radius:10px;margin-top:6px}
 .report .meta{font-size:13px;color:var(--ink-2)}
 .report .note{font-size:13.5px;color:var(--ink-2);margin-top:6px}
-.code-box{font-size:26px;font-weight:900;letter-spacing:3px;text-align:center;padding:14px;border-radius:12px;background:var(--bg);font-variant-numeric:tabular-nums;margin:6px 0 10px;overflow-wrap:anywhere}
+.code-box{font-size:20px;font-weight:900;letter-spacing:1px;line-height:1.35;text-align:center;padding:14px;border-radius:12px;background:var(--bg);font-variant-numeric:tabular-nums;margin:6px 0 10px;overflow-wrap:anywhere}
 .linkline{font-size:13px;color:var(--ink-2);background:var(--bg);border-radius:10px;padding:10px 12px;overflow-wrap:anywhere;user-select:all}
 .swatches{display:flex;flex-wrap:wrap;gap:10px;margin:4px 0 8px}
 .sw{width:36px;height:36px;border-radius:50%;border:3px solid transparent;box-shadow:0 0 0 1px var(--line);display:block}
@@ -507,6 +507,21 @@ const brandHTML = (t, cls = "") => `<span class="brandmark ${cls}" style="backgr
 const brandLetters = n => { const w = n.trim().split(/\s+/).filter(Boolean); if (w.length > 1) return w.slice(0, 3).map(x => x[0]).join("").toUpperCase(); return n.length <= 4 ? n.toUpperCase() : n[0].toUpperCase(); };
 const dmId = (a, b) => "dm_" + [a, b].sort().join("_");
 const randCode = n => { const a = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789", r = crypto.getRandomValues(new Uint8Array(n)); return [...r].map(x => a[x % a.length]).join(""); };
+// Invite codes are always made of Bible words, e.g. MANNA-JORDAN-SHEPHERD-27
+const BIBLE_WORDS = "AMEN ANGEL ARK BREAD CROSS CROWN DOVE EDEN FAITH GRACE HOPE JOY LAMB LIGHT LOVE MANNA OLIVE PEACE PSALM SALT STAR VINE WATER WORD ZION ABRAHAM ISAAC JACOB JOSEPH MOSES AARON MIRIAM JOSHUA CALEB GIDEON RUTH NAOMI BOAZ HANNAH SAMUEL DAVID JONATHAN SOLOMON ELIJAH ELISHA ESTHER ISAIAH JEREMIAH DANIEL JONAH MICAH NOAH ADAM EVE ENOCH SARAH REBEKAH RACHEL LEAH DEBORAH PETER ANDREW JAMES JOHN PHILIP THOMAS MATTHEW MARK LUKE PAUL SILAS TIMOTHY TITUS LYDIA PRISCILLA BARNABAS STEPHEN MARY MARTHA LAZARUS ZACCHAEUS JORDAN JERICHO BETHEL BETHANY NAZARETH GALILEE CANAAN EGYPT SINAI CARMEL HEBRON JUDAH ISRAEL ANTIOCH CORINTH EPHESUS PHILIPPI ROME SHILOH SAMARIA ALTAR ANCHOR BANNER BLESSING CEDAR COVENANT CUP DAWN EAGLE FIG FISH FLAME FOUNTAIN GARDEN GLORY HARP HARVEST HONEY JUBILEE KINGDOM LAMP LILY LION MERCY MORNING MUSTARD OIL PALM PEARL PRAISE PRAYER RAINBOW RIVER ROCK ROSE SABBATH SEED SHEPHERD SHIELD SONG SPIRIT STONE SWORD TEMPLE TRUMPET TRUTH WELL WHEAT WINGS WISDOM PSALTER SCROLL GOSPEL MANGER STABLE CANDLE OASIS SPRING TABERNACLE VINEYARD BRANCH LANTERN HOSANNA ALLELUIA SHALOM EMMANUEL MESSIAH SAVIOR REDEEMER COMFORTER BELIEVE KINDNESS PATIENCE GOODNESS GENTLE BLESSED HOLY FAITHFUL CHOSEN FORGIVEN RISEN".split(" ");
+const rnd = n => crypto.getRandomValues(new Uint32Array(1))[0] % n;
+const inviteCode = () => [0, 1, 2].map(() => BIBLE_WORDS[rnd(BIBLE_WORDS.length)]).join("-") + "-" + (10 + rnd(90));
+// "manna jordan shepherd 27", "Manna-Jordan-Shepherd-27" and "mannajordanshepherd27" all become MANNA-JORDAN-SHEPHERD-27
+function normCode(raw){
+  const c = String(raw || "").toUpperCase().replace(/[^A-Z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  if (c.includes("-")) return c;
+  const m = c.match(/^([A-Z]+)(\d*)$/); if (!m) return c;
+  const best = [[]];                       // split run-together words using the word list
+  for (let i = 1; i <= m[1].length; i++) for (const w of BIBLE_WORDS)
+    if (i >= w.length && best[i - w.length] && m[1].slice(i - w.length, i) === w){ best[i] = [...best[i - w.length], w]; break; }
+  const parts = best[m[1].length];
+  return parts && parts.length > 1 ? [...parts, ...(m[2] ? [m[2]] : [])].join("-") : c;
+}
 const inviteLink = code => new URL("download.html?invite=" + code, location.href).href;   // install page that also shows the code
 function toast(t){ const el = document.createElement("div"); el.className = "toast"; el.textContent = t; document.body.appendChild(el); setTimeout(() => el.remove(), 2600); }
 function sheet(html){
@@ -727,7 +742,7 @@ async function firebaseApi(){
       return c;
     },
     async createChurch(name){
-      const c = F.doc(col("churches")).id, code = randCode(10), key = await C.newKey(), theme = defaultTheme(name);
+      const c = F.doc(col("churches")).id, code = inviteCode(), key = await C.newKey(), theme = defaultTheme(name);
       const b = F.writeBatch(db);
       b.set(d("churches", c), { name, createdBy: user.uid, createdAt: ts(), theme, invite: code });
       b.set(d("churches", c, "members", user.uid), { name: (user.displayName || "Leader").slice(0, 30), photo: user.photoURL || "", role: "leader", devs: myDevs(), ck: { [K.dev]: await C.wrap(key, K.pub) }, joinedAt: ts() });
@@ -871,7 +886,7 @@ async function firebaseApi(){
       await b.commit();
     },
     async newInvite(theme, old){
-      const code = randCode(10), b = F.writeBatch(db);
+      const code = inviteCode(), b = F.writeBatch(db);
       b.set(d("invites", code), { churchId: cid, name: theme.name, tagline: theme.tagline, accent: theme.accent, logo: theme.logo, welcome: theme.welcome });
       if (old) b.delete(d("invites", old));
       b.update(d("churches", cid), { invite: code });
@@ -898,12 +913,12 @@ function demoApi(){
     u5: { name:"Chloe", email:"chloe@example.com" }, u9: { name:"Sam Lee", email:"sam@example.com" }
   };
   const churches = {
-    [FG]: { id: FG, name:"FGYG", createdBy:"me", invite:"FGYG7K2Q9M",
+    [FG]: { id: FG, name:"FGYG", createdBy:"me", invite:"MANNA-JORDAN-SHEPHERD-27",
       theme: { name:"FGYG", tagline:"Full Gospel Youth Group", accent:"#FF6B3D", logo:"", welcome:"Welcome to FGYG! 🙌 A leader will let you in soon." },
       members: { me:{role:"leader", at: now-90*D}, u1:{role:"member", at: now-40*D}, u2:{role:"member", at: now-30*D}, u3:{role:"member", at: now-20*D}, u6:{role:"member", at: now-15*D}, u4:{role:"pending", at: now-2*Hr}, u5:{role:"pending", at: now-30*M} },
       anns: [], rooms: {}, msgs: {}, reports: [] }
   };
-  const invites = { FGYG7K2Q9M: FG };
+  const invites = { "MANNA-JORDAN-SHEPHERD-27": FG };
   const accounts = { me:{ [FG]:1 }, u1:{ [FG]:1 }, u4:{ [FG]:1 }, u9:{} };
   const who = { leader:"me", member:"u1", pending:"u4", new:"u9" };
   let mode = "leader", cbAuth, cur = null, H = null, roomCb = null, roomOpen = null, seq = 100;
@@ -961,7 +976,7 @@ function demoApi(){
     const v = e.target.value;
     if (v === "out"){ cbAuth(null); return; }
     mode = v;
-    if (v === "new"){ S.invite = "FGYG7K2Q9M"; S.inviteInfo = null; } else { S.invite = null; S.inviteInfo = null; }
+    if (v === "new"){ S.invite = "MANNA-JORDAN-SHEPHERD-27"; S.inviteInfo = null; } else { S.invite = null; S.inviteInfo = null; }
     cbAuth(authUser());
   });
   return {
@@ -972,7 +987,7 @@ function demoApi(){
     async previewInvite(code){ const id = invites[code]; if (!id) return null; const t = churches[id].theme; return { churchId: id, name: t.name, tagline: t.tagline, accent: t.accent, logo: t.logo, welcome: t.welcome }; },
     async joinChurch(code){ const id = invites[code]; if (!id) throw new Error("bad-code"); const k = churches[id]; if (!k.members[uid()]) k.members[uid()] = { role:"pending", at: Date.now() }; accounts[uid()][id] = 1; return id; },
     async createChurch(name){
-      const id = "c" + (++seq), code = randCode(10);
+      const id = "c" + (++seq), code = inviteCode();
       churches[id] = { id, name, createdBy: uid(), invite: code, theme: defaultTheme(name), members: { [uid()]: { role:"leader", at: Date.now() } }, anns: [], rooms: { main: { id:"main", type:"main", members:[], createdBy: uid(), lastAt:0, lastText:"", lastUid:"" } }, msgs: { main: [] }, reports: [] };
       invites[code] = id; accounts[uid()][id] = 1; return id;
     },
@@ -993,7 +1008,7 @@ function demoApi(){
     async setRole(id, r){ c().members[id].role = r; push(); },
     async setName(n){ users[uid()].name = n; push(); },
     async saveTheme(theme){ c().theme = { ...theme }; c().name = theme.name; push(); },
-    async newInvite(theme, old){ const code = randCode(10); delete invites[old]; invites[code] = cur; c().invite = code; push(); return code; },
+    async newInvite(theme, old){ const code = inviteCode(); delete invites[old]; invites[code] = cur; c().invite = code; push(); return code; },
     async report(p){ c().reports.unshift({ id:"r"+(++seq), at: Date.now(), reporter: uid(), ...p }); push(); },
     async dismissReport(id){ c().reports = c().reports.filter(r => r.id !== id); push(); }
   };
@@ -1132,7 +1147,7 @@ async function renderHome(){
       : (inv ? "" : `<p class="lead">Join your church or youth group with the invite link or code a leader gave you.</p>`)}
     <div class="divider">HAVE AN INVITE CODE?</div>
     <form id="codeForm" class="row" style="align-items:flex-start">
-      <div class="field" style="flex:1;margin:0"><input id="codeInput" placeholder="Invite code" autocomplete="off" autocapitalize="characters" style="text-transform:uppercase"></div>
+      <div class="field" style="flex:1;margin:0"><input id="codeInput" placeholder="e.g. MANNA-JORDAN-SHEPHERD-27" autocomplete="off" autocapitalize="characters" style="text-transform:uppercase"></div>
       <button class="pill ok" type="submit" style="padding:13px 16px">Join</button>
     </form>
     <div class="divider">FOR LEADERS</div>
@@ -1140,7 +1155,7 @@ async function renderHome(){
     <p class="hint">Create a private space for your church or ministry. Only people you approve can get in, and no other group can see it.</p>`;
   $("#codeForm").addEventListener("submit", async e => {
     e.preventDefault();
-    const code = $("#codeInput").value.trim().toUpperCase().replace(/[^A-Z0-9]/g, ""); if (!code) return;
+    const code = normCode($("#codeInput").value); if (!code) return;
     const info = await api.previewInvite(code).catch(() => null);
     if (!info) return toast("That code doesn't work. Check it with your leader.");
     S.invite = code; S.inviteInfo = info; renderHome();
@@ -1403,7 +1418,7 @@ function manageInvite(){
       <div class="linkline">${esc(inviteLink(code))}</div>
       <button class="btn accent" data-act="copyLink">Copy link</button>
       <div class="sec-title">Or share this code</div>
-      <div class="code-box">${esc(code.replace(/(.{5})/, "$1 "))}</div>
+      <div class="code-box">${esc(code)}</div>
       <p class="hint">The link opens an install page with steps for iPhone and Android and shows this code. People who use it can ask to join; you still approve each person under People.</p>
       <button class="btn secondary" data-act="newInvite">Make a new link</button>
       <p class="hint">The old link and code stop working right away.</p>
@@ -1649,7 +1664,7 @@ document.addEventListener("submit", async e => {
 
 /* ---------- start ---------- */
 const urlInvite = new URLSearchParams(location.search).get("invite");
-if (urlInvite) store.set("invite", urlInvite.toUpperCase().replace(/[^A-Z0-9]/g, ""));
+if (urlInvite) store.set("invite", normCode(urlInvite));
 S.invite = store.get("invite", null);
 function startupError(e){
   console.error(e);
