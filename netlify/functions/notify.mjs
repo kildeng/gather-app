@@ -11,14 +11,16 @@ const ID = /^[A-Za-z0-9_-]{1,100}$/;
 const json = (o, status = 200) => new Response(JSON.stringify(o), { status, headers: { "content-type": "application/json", "cache-control": "no-store" } });
 
 // VAPID keys are created by this function the first time it runs and kept in Netlify Blobs.
+let cachedKeys = null;
 async function vapid(){
-  const store = getStore("gather-push");
+  if (cachedKeys) return cachedKeys;
+  const store = getStore({ name: "gather-push", consistency: "strong" });
   let k = await store.get("vapid", { type: "json" });
   if (!k?.publicKey){
-    await store.setJSON("vapid", newVapidKeys(), { onlyIfNew: true }).catch(() => {});
-    k = await store.get("vapid", { type: "json", consistency: "strong" });
+    await store.setJSON("vapid", newVapidKeys(), { onlyIfNew: true });
+    k = await store.get("vapid", { type: "json" });
   }
-  return k;
+  return (cachedKeys = k);
 }
 
 // Firestore REST, as the signed-in sender
