@@ -750,6 +750,12 @@ async function firebaseApi(){
           if (others.length >= 8) upd["devs." + others[0]] = F.deleteField();   // keep the list short
           F.updateDoc(d("churches", c, "members", user.uid), upd).catch(e => console.warn(e));
         }
+        // one-time upgrade for groups made before per-device keys: the leader starts a fresh group key
+        if (m?.role === "leader" && typeof m.ck?.ct === "string"){
+          const nk = await C.newKey();
+          const ok = await F.updateDoc(d("churches", c, "members", user.uid), { ck: { [K.dev]: await C.wrap(nk, K.pub) } }).then(() => true, e => (console.warn(e), false));
+          if (ok) return;   // the next snapshot carries the new key
+        }
         const myCk = m?.ck?.[K.dev];
         if (myCk && myCk.for === K.fp && myCk.ct !== ckSeen){
           try { churchKey = await C.unwrap(myCk, K.priv); ckSeen = myCk.ct; emitAnns(); emitRooms(); } catch(e){ console.warn(e); }
