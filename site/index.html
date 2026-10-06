@@ -815,7 +815,7 @@ async function firebaseApi(){
         const role = m?.role || null, changed = role !== myRole;
         myRole = role;
         if (changed){ unsubAll(subsIn); if (role === "member" || role === "leader") attachInside(); }
-        H?.me(m ? { name: m.name, photo: m.photo || "", role: m.role } : null);
+        H?.me(m ? { name: m.name, photo: m.photo || "", role: m.role } : null, !m);
       }, e => { console.warn(e); H?.me(null); }));
     },
     closeChurch(){ unsubAll(subsMe); unsubAll(subsIn); roomSub?.(); roomSub = null; cid = null; H = null; rawAnns = []; rawReports = []; mineRooms = []; mainRoom = null; members = {}; },
@@ -966,7 +966,44 @@ async function firebaseApi(){
       if (!Object.keys(wk).length) throw new Error("no-leaders");
       await F.addDoc(col("churches", cid, "reports"), { reporter: user.uid, wk, ...(await C.seal(key, payload)), createdAt: ts() });
     },
-    dismissReport: id => F.deleteDoc(d("churches", cid, "reports", id))
+    dismissReport: id => F.deleteDoc(d("churches", cid, "reports", id)),
+    // take a group off my list (after leaving, or when it no longer exists)
+    forgetGroup: c => F.updateDoc(d("users", user.uid), { ["groups." + c]: F.deleteField() }).catch(e => console.warn(e)),
+    // leave the whole group (church / ministry)
+    async leaveChurch(){
+      const c = cid;
+      await F.deleteDoc(d("churches", c, "members", user.uid));
+      await F.deleteDoc(d("churches", c, "contacts", user.uid)).catch(() => {});
+      await this.forgetGroup(c);
+    },
+    // leaders: delete the whole group for everyone. Everything a leader can reach is deleted; once the
+    // member list is gone, any private chat left behind can never be opened again (and stays encrypted).
+    async deleteChurch(onStep){
+      const c = cid, base = ["churches", c];
+      const wipe = async refs => { for (let i = 0; i < refs.length; i += 400){ const b = F.writeBatch(db); refs.slice(i, i + 400).forEach(r => b.delete(r)); await b.commit(); } };
+      const all = async (...p) => (await F.getDocs(col(...p))).docs.map(x => x.ref);
+      onStep?.("Deleting chats…");
+      for (const r of mineRooms){ const rr = { ...r, members: r.members || [] };
+        if ((rr.type === "group" && (rr.createdBy === user.uid || !rr.members.includes(rr.createdBy))) || rr.type === "dm") await this.deleteGroup(r.id).catch(e => console.warn(e)); }
+      const files = await all(...base, "rooms", "main", "files");
+      for (const f of files) await wipe(await all(...base, "rooms", "main", "files", f.id, "parts"));
+      await wipe(files);
+      await wipe(await all(...base, "rooms", "main", "messages"));
+      await F.deleteDoc(d(...base, "rooms", "main")).catch(e => console.warn(e));
+      onStep?.("Deleting announcements…");
+      await wipe(await all(...base, "announcements"));
+      await wipe(await all(...base, "reports"));
+      await wipe(await all(...base, "contacts"));
+      await wipe(await all(...base, "push"));
+      const ch = await F.getDoc(d(...base));
+      if (ch.data()?.invite) await F.deleteDoc(d("invites", ch.data().invite)).catch(e => console.warn(e));
+      onStep?.("Removing everyone…");
+      await F.deleteDoc(d(...base));
+      const mems = (await all(...base, "members")).filter(r => r.id !== user.uid);
+      await wipe(mems);
+      await F.deleteDoc(d(...base, "members", user.uid));
+      await this.forgetGroup(c);
+    }
   };
 }
 
@@ -1090,7 +1127,11 @@ function demoApi(){
     async saveTheme(theme){ c().theme = { ...theme }; c().name = theme.name; push(); },
     async newInvite(theme, old){ const code = inviteCode(); delete invites[old]; invites[code] = cur; c().invite = code; push(); return code; },
     async report(p){ c().reports.unshift({ id:"r"+(++seq), at: Date.now(), reporter: uid(), ...p }); push(); },
-    async dismissReport(id){ c().reports = c().reports.filter(r => r.id !== id); push(); }
+    async dismissReport(id){ c().reports = c().reports.filter(r => r.id !== id); push(); },
+    async forgetGroup(id){ delete accounts[uid()][id]; },
+    async leaveChurch(){ const id = cur; delete c().members[uid()]; delete accounts[uid()][id]; },
+    async deleteChurch(onStep){ const id = cur; for (const t of ["Deleting chats…", "Deleting announcements…", "Removing everyone…"]){ onStep?.(t); await new Promise(r => setTimeout(r, 400)); }
+      for (const u in accounts) delete accounts[u][id]; delete invites[churches[id].invite]; delete churches[id]; }
   };
 }
 
@@ -1169,9 +1210,13 @@ function enterChurch(cid){
 }
 
 const handlers = {
-  me(m){
+  me(m, gone){
     const prev = S.me?.role; S.me = m;
-    if (!m){ toast("You're no longer in this group."); leaveChurch(); store.set("lastGroup", null); renderHome(); return; }
+    if (!m){
+      if (gone && S.cid){ api.forgetGroup(S.cid); delete S.groups[S.cid]; }
+      if (!groupExitInProgress) toast(gone ? "This group no longer exists, or you're no longer in it." : "You're no longer in this group.");
+      leaveChurch(); store.set("lastGroup", null); renderHome(); return;
+    }
     if (m.role === "member" || m.role === "leader"){
       if (prev !== m.role || $("#scrMain").classList.contains("hidden")){
         show("scrMain");
@@ -1581,7 +1626,10 @@ function manageLook(){
     <div class="field"><label>Preview</label><div class="preview" style="--pv-accent:${esc(t.accent)}"><div class="pv-head">${brandHTML(t)}<div><div class="pv-name">${esc(t.name)}</div><div class="pv-tag">${esc(t.tagline)}</div></div></div><div class="pv-body"><span class="pv-bubble">See you Friday! 🙌</span></div></div></div>
     <button class="btn accent" type="submit" style="background:${esc(t.accent)}">Save changes</button>
     <p class="hint">The name, tagline, color, logo and welcome message are visible to anyone with your invite link. Messages never are.</p>
-  </form>`;
+  </form>
+  <div class="sec-title" style="margin-top:26px">Danger zone</div>
+  <button class="btn danger" data-act="deleteChurch">Delete this group for everyone</button>
+  <p class="hint">Removes the group, its announcements and chats, and everyone's access. This can't be undone.</p>`;
 }
 function bindLook(){
   const t = lookDraft, re = () => { const y = $("#mainArea").scrollTop; renderManage(); $("#mainArea").scrollTop = y; };
@@ -1624,7 +1672,43 @@ function renderMe(){
       <p class="hint" style="margin:6px 0 0">Messages and photos are locked on your device. If you sign in on a new phone or computer, your group's apps share access with it automatically.</p></div>
     ${notifCard()}
     <button class="btn secondary" data-act="switcher">Switch group</button>
-    <button class="btn secondary" data-act="logout">Sign out</button>`;
+    <button class="btn secondary" data-act="logout">Sign out</button>
+    <div class="sec-title" style="margin-top:22px">${esc(theme()?.name || "This group")}</div>
+    <button class="btn secondary" data-act="leaveChurch" style="color:var(--danger)">Leave this group</button>
+    ${p.role === "leader" ? `<button class="btn danger" data-act="deleteChurch">Delete this group for everyone</button>` : ""}`;
+}
+
+/* Leave or delete a whole group */
+let groupExitInProgress = false;
+async function leaveChurchFlow(){
+  const t = theme()?.name || "this group";
+  const leaders = Object.values(S.members).filter(m => m.role === "leader").length;
+  if (isLeader() && leaders <= 1) return askConfirm(`You're the only leader of ${t}. Make someone else a leader first (Manage → People), or delete the group.`, "OK");
+  if (!await askConfirm(`Leave ${t}? You'll lose access to its announcements and chats. To come back you'll need a new invite and a leader's approval.`, "Leave group", true)) return;
+  groupExitInProgress = true;
+  try { const id = S.cid; await api.leaveChurch(); delete S.groups[id]; leaveChurch(); store.set("lastGroup", null); renderHome(); toast(`You left ${t}`); }
+  catch(e){ console.error(e); toast("That didn't work. Try again."); }
+  groupExitInProgress = false;
+}
+function deleteChurchFlow(){
+  const t = theme()?.name || "";
+  const bg = sheet(`<h3>Delete ${esc(t)}?</h3>
+    <p style="margin:0 0 10px">This deletes the group for <b>everyone</b>: announcements, the group chat, photos and files, the invite link, and every member's access. It can't be undone.</p>
+    <div class="field"><label for="delConfirm">Type <b>${esc(t)}</b> to confirm</label><input id="delConfirm" autocomplete="off"></div>
+    <div class="row"><button type="button" class="btn secondary" data-close>Cancel</button><button type="button" class="btn" id="delGo" style="background:var(--danger);color:#fff" disabled>Delete group</button></div>`);
+  const inp = bg.querySelector("#delConfirm"), go = bg.querySelector("#delGo");
+  setTimeout(() => inp.focus(), 50);
+  inp.addEventListener("input", () => { go.disabled = inp.value.trim().toLowerCase() !== t.trim().toLowerCase(); });
+  go.addEventListener("click", async () => {
+    go.disabled = true; inp.disabled = true; bg.querySelector("[data-close]").disabled = true;
+    groupExitInProgress = true;
+    const id = S.cid;
+    try {
+      await api.deleteChurch(step => { go.textContent = step; });
+      bg.remove(); delete S.groups[id]; leaveChurch(); store.set("lastGroup", null); renderHome(); toast(`${t} was deleted`);
+    } catch(e){ console.error(e); go.textContent = "Delete group"; go.disabled = false; inp.disabled = false; toast("Couldn't finish deleting. Try again."); }
+    groupExitInProgress = false;
+  });
 }
 
 /* Switch between groups quickly */
@@ -1873,6 +1957,8 @@ document.addEventListener("click", async e => {
     if (act === "installNow" && installEvt){ installEvt.prompt(); const { outcome } = await installEvt.userChoice; installEvt = null; if (outcome === "accepted") store.set("hideTip", true); renderAnn(); }
     if (act === "openRoom") openRoom(id);
     if (act === "switcher") openSwitcher();
+    if (act === "leaveChurch") leaveChurchFlow();
+    if (act === "deleteChurch") deleteChurchFlow();
     if (act === "pushOn") enablePush();
     if (act === "pushOff") disablePush();
     if (act === "pushTest") pushTest();

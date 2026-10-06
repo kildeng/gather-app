@@ -42,7 +42,7 @@ service cloud.firestore {
         && leaderAfter(cid);
       allow update: if isLeader(cid) && changed().hasOnly(['name', 'theme', 'invite'])
         && (!('theme' in request.resource.data) || request.resource.data.theme.logo.size() < 120000);
-      allow delete: if false;
+      allow delete: if isLeader(cid);                         // leaders can delete the whole group
 
       match /members/{u} {
         allow get: if signedIn() && (uid() == u || isLeader(cid) || (isMember(cid) && resource.data.role in ['member', 'leader']));
@@ -74,7 +74,8 @@ service cloud.firestore {
           // leaders: approve / remove / make leader, and hand out the group key
           || (isLeader(cid) && changed().hasOnly(['role', 'ck'])
             && request.resource.data.role in ['pending', 'member', 'leader', 'removed']);
-        allow delete: if false;
+        // leave the group yourself; leaders remove everyone when deleting the group
+        allow delete: if signedIn() && (uid() == u || isLeader(cid));
       }
 
       // Email addresses: only the person themself and leaders (to recognise who's asking to join)
@@ -83,6 +84,7 @@ service cloud.firestore {
         allow create, update: if signedIn() && uid() == u
           && request.resource.data.keys().hasOnly(['email'])
           && request.resource.data.email == request.auth.token.email;
+        allow delete: if signedIn() && (uid() == u || isLeader(cid));
       }
 
       match /announcements/{id} {
@@ -113,7 +115,7 @@ service cloud.firestore {
         allow create, update: if isMember(cid) && uid() == u
           && request.resource.data.keys().hasOnly(['subs'])
           && request.resource.data.subs is map && request.resource.data.subs.size() <= 10;
-        allow delete: if signedIn() && uid() == u;
+        allow delete: if signedIn() && (uid() == u || isLeader(cid));
       }
 
       match /rooms/{rid} {
@@ -162,7 +164,7 @@ service cloud.firestore {
                 && keysOk())
           );
 
-        allow delete: if isMember(cid) && resource.data.type != 'main' && admin(resource.data);
+        allow delete: if isMember(cid) && ((resource.data.type != 'main' && admin(resource.data)) || (rid == 'main' && isLeader(cid)));
 
         match /messages/{id} {
           allow read: if inRoom();

@@ -1,5 +1,5 @@
 // FGYG service worker: caches the app shell so it opens fast (chat data is always live)
-const CACHE = "gather-v8";
+const CACHE = "gather-v9";
 const SHELL = ["./", "index.html", "download.html", "manifest.json", "icons/icon-192.png", "icons/apple-touch-icon.png"];
 
 self.addEventListener("install", e => {
