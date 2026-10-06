@@ -1,7 +1,0 @@
-[
-  {
-    "origin": ["https://gather-church-app.netlify.app"],
-    "method": ["GET"],
-    "maxAgeSeconds": 3600
-  }
-]

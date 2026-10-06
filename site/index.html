@@ -388,7 +388,7 @@ const firebaseConfig = {
 const APP_NAME = "Gather";           // the platform's name, shown before someone joins a group
 const DEMO = firebaseConfig.apiKey === "YOUR_API_KEY";
 const MSG_LIMIT = 200;
-const MAX_FILE_MB = 25;
+const MAX_FILE_MB = 10;             // files are stored encrypted inside the database (free plan)
 const ACCENTS = ["#FF6B3D","#E0457B","#8B5CF6","#3B6FE0","#0E9F8E","#2E9E4F","#C97A0A","#475569"];
 const REASONS = ["Bullying or mean", "Inappropriate", "Makes me uncomfortable", "Spam", "Something else"];
 const defaultTheme = name => ({ name, tagline: "Announcements & chats", accent: ACCENTS[0], logo: "", welcome: "Welcome! A leader will approve you soon." });
@@ -460,7 +460,7 @@ const C = (() => {
   }
   async function sealBytes(sym, buf){ const iv = rand(12); return { iv: b64(iv), data: await subtle.encrypt({ name: "AES-GCM", iv }, sym, buf) }; }
   const openBytes = (sym, iv, buf) => subtle.decrypt({ name: "AES-GCM", iv: unb64(iv) }, sym, buf);
-  return { fp, genUser, importPriv, backup, restore, newKey, wrap, unwrap, seal, open, sealBytes, openBytes };
+  return { fp, genUser, importPriv, backup, restore, newKey, wrap, unwrap, seal, open, sealBytes, openBytes, b64, unb64 };
 })();
 const keyStore = (() => {
   const db = () => new Promise((ok, no) => {
@@ -571,9 +571,8 @@ async function firebaseApi(){
   const { initializeApp } = await import(`https://www.gstatic.com/firebasejs/${V}/firebase-app.js`);
   const A = await import(`https://www.gstatic.com/firebasejs/${V}/firebase-auth.js`);
   const F = await import(`https://www.gstatic.com/firebasejs/${V}/firebase-firestore.js`);
-  const ST = await import(`https://www.gstatic.com/firebasejs/${V}/firebase-storage.js`);
   const app = initializeApp(firebaseConfig);
-  const auth = A.getAuth(app), db = F.getFirestore(app), storage = ST.getStorage(app);
+  const auth = A.getAuth(app), db = F.getFirestore(app);
   const provider = new A.GoogleAuthProvider(); provider.setCustomParameters({ prompt: "select_account" });
   const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone;
   A.getRedirectResult(auth).catch(e => console.warn(e));
@@ -678,7 +677,15 @@ async function firebaseApi(){
     }
   }
 
-  const fileRef = (rid, name) => ST.ref(storage, `churches/${cid}/rooms/${rid}/${user.uid}/${Date.now()}_${randCode(6)}_${name.replace(/[^\w.\-]+/g, "_").slice(-60)}`);
+  // Files are encrypted on the phone, then split into ~600 KB pieces stored in the database.
+  // This keeps everything on Firebase's free plan (no separate file storage needed).
+  const PART = 600 * 1024;
+  const fcol = rid => col("churches", cid, "rooms", rid, "files");
+  async function delFile(rid, f){
+    if (!f?.path) return;
+    for (let i = 0; i < (f.parts || 1); i++) await F.deleteDoc(F.doc(fcol(rid), f.path, "parts", String(i))).catch(() => {});
+    await F.deleteDoc(F.doc(fcol(rid), f.path)).catch(() => {});
+  }
   const memberPub = u => members[u]?.pub ? JSON.parse(members[u].pub) : null;
 
   return {
@@ -768,16 +775,24 @@ async function firebaseApi(){
     async upload(rid, blob, name, onProgress){
       const key = await roomKey(rawRoom(rid)); if (!key) throw new Error("no-key");
       const { iv, data } = await C.sealBytes(key, await blob.arrayBuffer());
-      const ref = fileRef(rid, name);
-      const task = ST.uploadBytesResumable(ref, new Blob([data]), { contentType: "application/octet-stream" });
-      await new Promise((ok, no) => task.on("state_changed", s => onProgress(s.bytesTransferred / s.totalBytes), no, ok));
-      return { path: ref.fullPath, iv };
+      const bytes = new Uint8Array(data), n = Math.max(1, Math.ceil(bytes.length / PART));
+      const fref = F.doc(fcol(rid));
+      await F.setDoc(fref, { uid: user.uid, n, size: bytes.length, createdAt: ts() });
+      for (let i = 0; i < n; i++){
+        await F.setDoc(F.doc(fref, "parts", String(i)), { d: C.b64(bytes.subarray(i * PART, (i + 1) * PART)) });
+        onProgress((i + 1) / n);
+      }
+      return { path: fref.id, iv, parts: n };
     },
-    // download + decrypt a file for display (needs the bucket's CORS setting from the guide)
+    // download the pieces, join them, decrypt for display
     async fileUrl(rid, f){
       if (media.has(f.path)) return media.get(f.path);
       const key = await roomKey(rawRoom(rid)); if (!key) throw new Error("no-key");
-      const buf = await (await ST.getBlob(ST.ref(storage, f.path))).arrayBuffer();
+      const snaps = await Promise.all(Array.from({ length: f.parts || 1 }, (_, i) => F.getDoc(F.doc(fcol(rid), f.path, "parts", String(i)))));
+      const pieces = snaps.map(s => { if (!s.exists()) throw new Error("missing-part"); return C.unb64(s.data().d); });
+      const all = new Uint8Array(pieces.reduce((a, p) => a + p.length, 0));
+      let o = 0; for (const p of pieces){ all.set(p, o); o += p.length; }
+      const buf = all.buffer;
       const url = URL.createObjectURL(new Blob([await C.openBytes(key, f.iv, buf)], { type: f.type || "application/octet-stream" }));
       media.set(f.path, url); return url;
     },
@@ -790,7 +805,7 @@ async function firebaseApi(){
     },
     async delMsg(rid, m){
       await F.deleteDoc(d("churches", cid, "rooms", rid, "messages", m.id));
-      if (m.file?.path) ST.deleteObject(ST.ref(storage, m.file.path)).catch(() => {});
+      if (m.file?.path) delFile(rid, m.file);
     },
     async openDM(other){
       const id = dmId(user.uid, other);
@@ -826,7 +841,7 @@ async function firebaseApi(){
       const s = await F.getDocs(col("churches", cid, "rooms", rid, "messages"));
       for (const x of s.docs){
         const p = await tryOpen(key, x.data());
-        if (p?.f?.path) await ST.deleteObject(ST.ref(storage, p.f.path)).catch(() => {});
+        if (p?.f?.path) await delFile(rid, p.f);
         await F.deleteDoc(x.ref);
       }
       await F.deleteDoc(d("churches", cid, "rooms", rid));

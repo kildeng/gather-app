@@ -155,6 +155,31 @@ service cloud.firestore {
             || (rid == 'main' && isLeader(cid))
             || (room().type == 'group' && room().createdBy == uid()));
         }
+
+        // Photos and files: encrypted on the phone, stored as ~600 KB pieces (keeps the free plan)
+        match /files/{fid} {
+          function fileOwner() { return get(/databases/$(database)/documents/churches/$(cid)/rooms/$(rid)/files/$(fid)).data.uid; }
+          function canRemove(owner) { return isMember(cid) && (owner == uid()
+            || (rid == 'main' && isLeader(cid))
+            || (room().type == 'group' && room().createdBy == uid())); }
+
+          allow read: if inRoom();
+          allow create: if inRoom()
+            && request.resource.data.keys().hasOnly(['uid', 'n', 'size', 'createdAt'])
+            && request.resource.data.uid == uid()
+            && request.resource.data.n is int && request.resource.data.n >= 1 && request.resource.data.n <= 20
+            && request.resource.data.size is int && request.resource.data.size <= 11 * 1024 * 1024
+            && request.resource.data.createdAt == request.time;
+          allow delete: if canRemove(resource.data.uid);
+
+          match /parts/{p} {
+            allow read: if inRoom();
+            allow create: if inRoom() && fileOwner() == uid()
+              && request.resource.data.keys().hasOnly(['d'])
+              && request.resource.data.d is string && request.resource.data.d.size() <= 850000;
+            allow delete: if canRemove(fileOwner());
+          }
+        }
       }
     }
   }
