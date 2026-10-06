@@ -796,7 +796,7 @@ async function firebaseApi(){
       subsMe.push(F.onSnapshot(d("churches", c, "members", user.uid), async s => {
         const m = s.exists() ? s.data() : null;
         // make sure this device is listed so others can share keys with it
-        if (m && m.role !== "removed" && m.devs?.[K.dev]?.fp !== K.fp){
+        if (m && m.role !== "removed" && m.devs?.[K.dev]?.fp !== K.fp){   // (closed groups are skipped)
           const upd = { ["devs." + K.dev]: { pub: JSON.stringify(K.pub), fp: K.fp } };
           const others = Object.keys(m.devs || {}).filter(x => x !== K.dev);
           if (others.length >= 8) upd["devs." + others[0]] = F.deleteField();   // keep the list short
@@ -815,7 +815,8 @@ async function firebaseApi(){
         const role = m?.role || null, changed = role !== myRole;
         myRole = role;
         if (changed){ unsubAll(subsIn); if (role === "member" || role === "leader") attachInside(); }
-        H?.me(m ? { name: m.name, photo: m.photo || "", role: m.role } : null, !m);
+        const closed = m?.role === "removed" && m.ck?._deleted === true;   // the group was deleted by a leader
+        H?.me(m && !closed ? { name: m.name, photo: m.photo || "", role: m.role } : null, !m || closed);
       }, e => { console.warn(e); H?.me(null); }));
     },
     closeChurch(){ unsubAll(subsMe); unsubAll(subsIn); roomSub?.(); roomSub = null; cid = null; H = null; rawAnns = []; rawReports = []; mineRooms = []; mainRoom = null; members = {}; },
@@ -972,7 +973,7 @@ async function firebaseApi(){
     // leave the whole group (church / ministry)
     async leaveChurch(){
       const c = cid;
-      await F.deleteDoc(d("churches", c, "members", user.uid));
+      await F.deleteDoc(d("churches", c, "members", user.uid)).catch(e => console.warn(e));
       await F.deleteDoc(d("churches", c, "contacts", user.uid)).catch(() => {});
       await this.forgetGroup(c);
     },
@@ -980,8 +981,9 @@ async function firebaseApi(){
     // member list is gone, any private chat left behind can never be opened again (and stays encrypted).
     async deleteChurch(onStep){
       const c = cid, base = ["churches", c];
-      const wipe = async refs => { for (let i = 0; i < refs.length; i += 400){ const b = F.writeBatch(db); refs.slice(i, i + 400).forEach(r => b.delete(r)); await b.commit(); } };
-      const all = async (...p) => (await F.getDocs(col(...p))).docs.map(x => x.ref);
+      // each step is best-effort, so the group always ends up closed even if one part can't be removed
+      const wipe = async refs => { for (let i = 0; i < refs.length; i += 400){ const b = F.writeBatch(db); refs.slice(i, i + 400).forEach(r => b.delete(r)); await b.commit().catch(e => console.warn(e)); } };
+      const all = async (...p) => (await F.getDocs(col(...p)).catch(() => ({ docs: [] }))).docs.map(x => x.ref);
       onStep?.("Deleting chats…");
       for (const r of mineRooms){ const rr = { ...r, members: r.members || [] };
         if ((rr.type === "group" && (rr.createdBy === user.uid || !rr.members.includes(rr.createdBy))) || rr.type === "dm") await this.deleteGroup(r.id).catch(e => console.warn(e)); }
@@ -995,13 +997,18 @@ async function firebaseApi(){
       await wipe(await all(...base, "reports"));
       await wipe(await all(...base, "contacts"));
       await wipe(await all(...base, "push"));
-      const ch = await F.getDoc(d(...base));
-      if (ch.data()?.invite) await F.deleteDoc(d("invites", ch.data().invite)).catch(e => console.warn(e));
+      const ch = await F.getDoc(d(...base)).catch(() => null);
+      if (ch?.data()?.invite) await F.deleteDoc(d("invites", ch.data().invite)).catch(e => console.warn(e));
       onStep?.("Removing everyone…");
-      await F.deleteDoc(d(...base));
       const mems = (await all(...base, "members")).filter(r => r.id !== user.uid);
-      await wipe(mems);
-      await F.deleteDoc(d(...base, "members", user.uid));
+      const full = await F.deleteDoc(d(...base)).then(() => true, () => false);
+      if (full){ await wipe(mems); await F.deleteDoc(d(...base, "members", user.uid)).catch(e => console.warn(e)); }
+      else {
+        // close the group: everyone (me last) loses access, marked so their apps drop it from their list
+        const gone = { role: "removed", ck: { _deleted: true } };
+        for (let i = 0; i < mems.length; i += 400){ const b = F.writeBatch(db); mems.slice(i, i + 400).forEach(r => b.update(r, gone)); await b.commit().catch(e => console.warn(e)); }
+        await F.updateDoc(d(...base, "members", user.uid), gone);
+      }
       await this.forgetGroup(c);
     }
   };
