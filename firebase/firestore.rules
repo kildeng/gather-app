@@ -107,9 +107,21 @@ service cloud.firestore {
           && request.resource.data.createdAt == request.time;
       }
 
+      // Notification addresses (where to send "new message" pings). Members of this group only; only you can change yours.
+      match /push/{u} {
+        allow read: if isMember(cid);
+        allow create, update: if isMember(cid) && uid() == u
+          && request.resource.data.keys().hasOnly(['subs'])
+          && request.resource.data.subs is map && request.resource.data.subs.size() <= 10;
+        allow delete: if signedIn() && uid() == u;
+      }
+
       match /rooms/{rid} {
         function room() { return get(/databases/$(database)/documents/churches/$(cid)/rooms/$(rid)).data; }
         function inRoom() { return isMember(cid) && (room().type == 'main' || uid() in room().members); }
+        // who can manage a chat: the group's creator (or anyone in it once the creator has left); either person in a private chat
+        function admin(r) { return uid() in r.members
+          && ((r.type == 'group' && (r.createdBy == uid() || !(r.createdBy in r.members))) || r.type == 'dm'); }
         function keysOk() { return request.resource.data.wk.keys().toSet().difference(request.resource.data.members.toSet()).size() == 0; }
 
         // a chat is visible only to its members (main chat: everyone approved). Leaders get nothing extra.
@@ -132,10 +144,16 @@ service cloud.firestore {
         allow update: if isMember(cid) && (resource.data.type == 'main' || uid() in resource.data.members) && (
             // "last message" preview (encrypted)
             (changed().hasOnly(['lastAt', 'lastUid', 'lastEnc']) && request.resource.data.lastUid == uid())
+            // "I've read up to now" (only your own entry, stamped by the server)
+            || (changed().hasOnly(['reads'])
+                && request.resource.data.reads.diff(resource.data.get('reads', {})).affectedKeys().hasOnly([uid()])
+                && request.resource.data.reads[uid()] == request.time)
             // any member can share the chat key with another member who's missing it
             || (resource.data.type != 'main' && changed().hasOnly(['wk']) && keysOk())
-            // the group's creator: rename, add or remove people
-            || (resource.data.type == 'group' && resource.data.createdBy == uid()
+            // anyone in a group chat can rename it
+            || (resource.data.type == 'group' && changed().hasOnly(['nameEnc']))
+            // the chat's manager: add or remove people
+            || (resource.data.type == 'group' && admin(resource.data)
                 && changed().hasOnly(['nameEnc', 'members', 'wk'])
                 && request.resource.data.members.size() <= 100 && keysOk())
             // anyone can leave a group
@@ -144,7 +162,7 @@ service cloud.firestore {
                 && keysOk())
           );
 
-        allow delete: if isMember(cid) && resource.data.type == 'group' && resource.data.createdBy == uid();
+        allow delete: if isMember(cid) && resource.data.type != 'main' && admin(resource.data);
 
         match /messages/{id} {
           allow read: if inRoom();
@@ -153,10 +171,10 @@ service cloud.firestore {
             && request.resource.data.uid == uid()
             && str(request.resource.data.ct, 1, 20000)
             && request.resource.data.createdAt == request.time;
-          // your own messages; leaders in the main chat; a group's creator (when deleting the group)
+          // your own messages; leaders in the main chat; the chat's manager (when deleting the chat)
           allow delete: if isMember(cid) && (resource.data.uid == uid()
             || (rid == 'main' && isLeader(cid))
-            || (room().type == 'group' && room().createdBy == uid()));
+            || (room().type != 'main' && admin(room())));
         }
 
         // Photos and files: encrypted on the phone, stored as ~600 KB pieces (keeps the free plan)
@@ -164,7 +182,7 @@ service cloud.firestore {
           function fileOwner() { return get(/databases/$(database)/documents/churches/$(cid)/rooms/$(rid)/files/$(fid)).data.uid; }
           function canRemove(owner) { return isMember(cid) && (owner == uid()
             || (rid == 'main' && isLeader(cid))
-            || (room().type == 'group' && room().createdBy == uid())); }
+            || (room().type != 'main' && admin(room()))); }
 
           allow read: if inRoom();
           allow create: if inRoom()

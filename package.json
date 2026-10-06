@@ -1,0 +1,8 @@
+{
+  "name": "gather-app",
+  "private": true,
+  "description": "Gather: private, end-to-end encrypted announcements and chats for churches",
+  "dependencies": {
+    "@netlify/blobs": "^8.1.0"
+  }
+}

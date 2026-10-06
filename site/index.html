@@ -186,7 +186,27 @@ main{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;min-height:0}
 .uploading{font-size:13px;color:var(--ink-3);align-self:flex-end;background:var(--card);border:1px dashed var(--line);border-radius:14px;padding:8px 12px;margin-top:6px}
 .uploading .bar{height:4px;border-radius:2px;background:var(--line);margin-top:6px;overflow:hidden;width:180px}
 .uploading .bar i{display:block;height:100%;background:var(--accent);width:0}
-.msg .time{font-size:11px;color:var(--ink-3);white-space:nowrap;padding-bottom:3px}
+.msg .time{font-size:11px;color:var(--ink-3);white-space:nowrap;padding-bottom:3px;display:flex;flex-direction:column;align-items:flex-end;line-height:1.25}
+.msg:not(.me) .time{align-items:flex-start}
+.msg .rc{font-size:11px;font-weight:800;color:var(--accent)}
+.msg .rc.all{color:var(--ok)}
+.msg .rc.all svg{width:13px;height:13px;vertical-align:-2px}
+.sysmsg{align-self:center;font-size:12.5px;color:var(--ink-3);background:var(--card);border:1px solid var(--line);padding:4px 12px;border-radius:999px;margin:8px 0;text-align:center;max-width:90%}
+.gsw{display:flex;align-items:center;gap:4px;padding:2px 4px 2px 2px;border-radius:12px}
+.gsw .car{font-size:11px;color:var(--ink-3)}
+.gsw:active{background:var(--line)}
+.mtabs{display:flex;gap:6px;margin:4px 0 10px}
+.mtabs button{flex:1;padding:8px;border-radius:10px;border:1px solid var(--line);background:var(--card);font-weight:700;font-size:13.5px}
+.mtabs button.on{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.mgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:4px}
+.mgrid .cell{aspect-ratio:1;border-radius:8px;overflow:hidden;background:var(--line);display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--ink-3);position:relative}
+.mgrid img,.mgrid video{width:100%;height:100%;object-fit:cover;display:block}
+.mgrid .cell .play{position:absolute;inset:auto auto 6px 6px;background:rgba(0,0,0,.55);color:#fff;border-radius:6px;padding:1px 6px;font-size:11px}
+.mfiles .filecard{width:100%;margin-bottom:6px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px}
+.info-acts{display:flex;flex-direction:column;gap:8px;margin-top:12px}
+.dice{flex-shrink:0;width:46px;height:46px;border-radius:12px;border:1px solid var(--line);background:var(--card);font-size:20px}
+.notif-card .row{margin-top:10px}
+.push-tip{display:flex;gap:10px;align-items:flex-start;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 14px;margin-bottom:12px;font-size:14px}
 .msg .acts{display:none;gap:6px;margin-top:4px}
 .msg.sel .acts{display:flex}
 .msg.sel .bubble{outline:2px solid var(--accent);outline-offset:1px}
@@ -389,6 +409,13 @@ const MSG_LIMIT = 200;
 const MAX_FILE_MB = 10;             // files are stored encrypted inside the database (free plan)
 const ACCENTS = ["#FF6B3D","#E0457B","#8B5CF6","#3B6FE0","#0E9F8E","#2E9E4F","#C97A0A","#475569"];
 const REASONS = ["Bullying or mean", "Inappropriate", "Makes me uncomfortable", "Spam", "Something else"];
+// Default names for new group chats: books of the Bible and Bible people everyone recognizes
+const ROOM_NAMES = ("Genesis Exodus Leviticus Numbers Deuteronomy Joshua Judges Ruth 1-Samuel 2-Samuel 1-Kings 2-Kings 1-Chronicles 2-Chronicles Ezra Nehemiah Esther Job Psalms Proverbs Ecclesiastes Song-of-Songs Isaiah Jeremiah Lamentations Ezekiel Daniel Hosea Joel Amos Obadiah Jonah Micah Nahum Habakkuk Zephaniah Haggai Zechariah Malachi " +
+  "Matthew Mark Luke John Acts Romans 1-Corinthians 2-Corinthians Galatians Ephesians Philippians Colossians 1-Thessalonians 2-Thessalonians 1-Timothy 2-Timothy Titus Philemon Hebrews James 1-Peter 2-Peter 1-John 2-John 3-John Jude Revelation " +
+  "Team-Abraham Team-Moses Team-David Team-Noah Team-Esther Team-Daniel Team-Elijah Team-Peter Team-Paul Team-Mary Team-Joseph Team-Gideon Team-Deborah Team-Samuel Team-Hannah Team-Barnabas Team-Lydia Team-Timothy Team-Caleb Team-Joshua Team-Ruth Team-Nehemiah Team-Isaiah Team-Solomon")
+  .split(" ").map(x => x.replace(/-/g, " "));
+const randomRoomName = () => ROOM_NAMES[crypto.getRandomValues(new Uint32Array(1))[0] % ROOM_NAMES.length];
+const PUSH_API = "/api/notify";
 const defaultTheme = name => ({ name, tagline: "Announcements & chats", accent: ACCENTS[0], logo: "", welcome: "Welcome! A leader will approve you soon." });
 
 /* ============================================================
@@ -644,7 +671,8 @@ async function firebaseApi(){
       const nm = r.type === "group" ? await tryOpen(key, r.nameEnc) : null;
       const last = await tryOpen(key, r.lastEnc);
       return { id: r.id, type: r.type, members: r.members || [], createdBy: r.createdBy, name: nm?.n || (r.type === "group" ? "Private group" : ""),
-        lastAt: r.lastAt ? toMs(r.lastAt) : 0, lastUid: r.lastUid || "", lastText: last?.t || "", locked: !key };
+        lastAt: r.lastAt ? toMs(r.lastAt) : 0, lastUid: r.lastUid || "", lastText: last?.t || "", locked: !key,
+        reads: Object.fromEntries(Object.entries(r.reads || {}).map(([u, t]) => [u, toMs(t)])) };
     }));
     H?.rooms(list);
     heal();
@@ -712,6 +740,15 @@ async function firebaseApi(){
     for (let i = 0; i < (f.parts || 1); i++) await F.deleteDoc(F.doc(fcol(rid), f.path, "parts", String(i))).catch(() => {});
     await F.deleteDoc(F.doc(fcol(rid), f.path)).catch(() => {});
   }
+  // Ask the notification helper to ping the other people in this chat. It never sees the message:
+  // the phone only says "something new in room X", and the helper checks you really are in that room.
+  async function notify(kind, rid){
+    try {
+      const token = await auth.currentUser?.getIdToken(); if (!token) return;
+      fetch(PUSH_API, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token, cid, rid, kind }), keepalive: true }).catch(() => {});
+    } catch {}
+  }
+  const sysMsg = async (key, s, w) => ({ uid: user.uid, ...(await C.seal(key, { t: "", f: null, s, w: w || null })), createdAt: ts() });
 
   return {
     async login(){
@@ -790,7 +827,7 @@ async function firebaseApi(){
           const v = x.data(), k = x.id + ":" + v.ct?.length + ":" + !!key;
           if (msgCache.has(k)) return msgCache.get(k);
           const p = await tryOpen(key, v);
-          const m = { id: x.id, uid: v.uid, at: toMs(v.createdAt), text: p?.t || "", file: p?.f || null, locked: !p };
+          const m = { id: x.id, uid: v.uid, at: toMs(v.createdAt), text: p?.t || "", file: p?.f || null, sys: p?.s || null, who: p?.w || null, locked: !p };
           if (p && v.createdAt) msgCache.set(k, m);
           return m;
         }));
@@ -801,6 +838,7 @@ async function firebaseApi(){
     async addAnn(title, body, pinned){
       if (!churchKey) throw new Error("no-key");
       await F.addDoc(col("churches", cid, "announcements"), { uid: user.uid, pinned: !!pinned, ...(await C.seal(churchKey, { title, body })), createdAt: ts() });
+      notify("ann", "main");
     },
     delAnn: id => F.deleteDoc(d("churches", cid, "announcements", id)),
     async upload(rid, blob, name, onProgress){
@@ -833,6 +871,23 @@ async function firebaseApi(){
       b.set(F.doc(col("churches", cid, "rooms", rid, "messages")), { uid: user.uid, ...(await C.seal(key, { t: text, f: file || null })), createdAt: ts() });
       b.update(d("churches", cid, "rooms", rid), { lastAt: ts(), lastUid: user.uid, lastEnc: await C.seal(key, { t: previewText(text, file) }) });
       await b.commit();
+      notify("msg", rid);
+    },
+    // "I've read up to now" — used for the little unread numbers next to messages
+    markRead: rid => F.updateDoc(d("churches", cid, "rooms", rid), { ["reads." + user.uid]: ts() }).catch(e => console.warn(e)),
+    // every photo, video and file ever posted in a chat (for the chat info screen)
+    async roomMedia(rid){
+      const key = await roomKey(rawRoom(rid)); if (!key) return [];
+      const s = await F.getDocs(F.query(col("churches", cid, "rooms", rid, "messages"), F.orderBy("createdAt", "desc"), F.limit(1000)));
+      const out = [];
+      for (const x of s.docs){ const v = x.data(), p = await tryOpen(key, v); if (p?.f) out.push({ id: x.id, uid: v.uid, at: toMs(v.createdAt), file: p.f }); }
+      return out;
+    },
+    idToken: () => auth.currentUser.getIdToken(),
+    async savePush(sub){
+      if (!cid) return;
+      const devs = sub ? { [K.dev]: sub } : { [K.dev]: F.deleteField() };
+      await F.setDoc(d("churches", cid, "push", user.uid), { subs: devs }, { merge: true });
     },
     async delMsg(rid, m){
       await F.deleteDoc(d("churches", cid, "rooms", rid, "messages", m.id));
@@ -856,17 +911,29 @@ async function firebaseApi(){
     },
     async updateGroup(rid, { name, members: mem }){
       const r = rawRoom(rid), key = await roomKey(r); if (!key) throw new Error("no-key");
-      const upd = {};
-      if (name !== undefined) upd.nameEnc = await C.seal(key, { n: name });
+      const b = F.writeBatch(db), mref = () => F.doc(col("churches", cid, "rooms", rid, "messages")), upd = {};
+      if (name !== undefined){
+        upd.nameEnc = await C.seal(key, { n: name });
+        b.set(mref(), await sysMsg(key, "renamed", [name]));
+      }
       if (mem){
-        upd.members = mem;
         const wk = {};
         for (const u of mem) wk[u] = await wrapForDevs(key, devsOf(u), r.wk?.[u]);
-        upd.wk = wk;
+        Object.assign(upd, { members: mem, wk });
+        const added = mem.filter(u => !r.members.includes(u)), gone = r.members.filter(u => !mem.includes(u));
+        if (added.length) b.set(mref(), await sysMsg(key, "added", added));
+        if (gone.length) b.set(mref(), await sysMsg(key, "removed", gone));
       }
-      await F.updateDoc(d("churches", cid, "rooms", rid), upd);
+      b.update(d("churches", cid, "rooms", rid), upd);
+      await b.commit();
     },
-    leaveGroup: rid => F.updateDoc(d("churches", cid, "rooms", rid), { members: F.arrayRemove(user.uid), ["wk." + user.uid]: F.deleteField() }),
+    // leaving posts a small "… left" note so everyone can see who left
+    async leaveGroup(rid){
+      const key = await roomKey(rawRoom(rid)), b = F.writeBatch(db);
+      if (key) b.set(F.doc(col("churches", cid, "rooms", rid, "messages")), await sysMsg(key, "left"));
+      b.update(d("churches", cid, "rooms", rid), { members: F.arrayRemove(user.uid), ["wk." + user.uid]: F.deleteField() });
+      await b.commit();
+    },
     async deleteGroup(rid){
       const key = await roomKey(rawRoom(rid));
       const s = await F.getDocs(col("churches", cid, "rooms", rid, "messages"));
@@ -954,6 +1021,9 @@ function demoApi(){
     msg:{ uid:"u3", name:"Joshua", text:"lol nobody wants you there anyway", at: now-50*M } }];
   const last = (c, id) => { const l = c.msgs[id]?.at(-1); Object.assign(c.rooms[id], l ? { lastAt: l.at, lastUid: l.uid, lastText: previewText(l.text, l.file) } : { lastAt: 0, lastUid:"", lastText:"" }); };
   Object.keys(ch.rooms).forEach(id => last(ch, id));
+  // who has read up to when (u3 hasn't opened the main chat in a while)
+  const allIds = Object.keys(ch.members);
+  Object.values(ch.rooms).forEach(r => { r.reads = {}; (r.type === "main" ? allIds : r.members).forEach(u => r.reads[u] = u === "u3" ? now - 30*Hr : now); });
 
   const c = () => churches[cur];
   const myRole = () => c()?.members[uid()]?.role;
@@ -966,7 +1036,7 @@ function demoApi(){
     H.church({ id: k.id, name: k.name, createdBy: k.createdBy, invite: k.invite, theme: { ...k.theme } });
     H.anns(k.anns.map(a => ({ ...a })));
     H.members(Object.fromEntries(Object.entries(k.members).filter(([, v]) => role === "leader" || ["member","leader"].includes(v.role)).map(([id, v]) => [id, { name: users[id].name, photo:"", role: v.role, at: v.at }])));
-    H.rooms(Object.values(k.rooms).filter(r => r.type === "main" || r.members.includes(uid())).map(r => ({ ...r, members:[...r.members] })));
+    H.rooms(Object.values(k.rooms).filter(r => r.type === "main" || r.members.includes(uid())).map(r => ({ ...r, members:[...r.members], reads: { ...(r.reads || {}) } })));
     if (role === "leader"){ H.contacts(Object.fromEntries(Object.keys(k.members).map(id => [id, users[id].email]))); H.reports(k.reports.map(r => ({ ...r }))); }
   };
   const pushRoom = id => { if (roomCb && roomOpen === id) roomCb([...(c()?.msgs[id] || [])]); };
@@ -998,12 +1068,22 @@ function demoApi(){
     async delAnn(id){ c().anns = c().anns.filter(a => a.id !== id); push(); },
     async upload(rid, blob, name, onProgress){ for (let p = .2; p <= 1.01; p += .2){ await new Promise(r => setTimeout(r, 160)); onProgress(p); } return { url: URL.createObjectURL(blob) }; },
     async fileUrl(rid, f){ return f.url; },
-    async send(rid, text, file){ c().msgs[rid] = c().msgs[rid] || []; c().msgs[rid].push({ id:"m"+(++seq), uid: uid(), at: Date.now(), text, file: file || null }); last(c(), rid); push(); pushRoom(rid); },
+    async send(rid, text, file){ c().msgs[rid] = c().msgs[rid] || []; c().msgs[rid].push({ id:"m"+(++seq), uid: uid(), at: Date.now(), text, file: file || null }); last(c(), rid); (c().rooms[rid].reads ||= {})[uid()] = Date.now(); push(); pushRoom(rid);
+      // pretend the others read it a few seconds later, so the read counter can be seen going down
+      const others = (rid === "main" ? Object.keys(c().members).filter(u => ["member","leader"].includes(c().members[u].role)) : c().rooms[rid].members).filter(u => u !== uid() && u !== "u3");
+      others.forEach((u, i) => setTimeout(() => { if (c()?.rooms[rid]){ c().rooms[rid].reads[u] = Date.now(); push(); } }, 2500 + i * 1500)); },
+    async markRead(rid){ const r = c()?.rooms[rid]; if (r){ (r.reads ||= {})[uid()] = Date.now(); push(); } },
+    async roomMedia(rid){ return (c().msgs[rid] || []).filter(x => x.file).map(x => ({ id: x.id, uid: x.uid, at: x.at, file: x.file })).reverse(); },
+    async savePush(){},
+    async idToken(){ return ""; },
     async delMsg(rid, msg){ c().msgs[rid] = c().msgs[rid].filter(x => x.id !== msg.id); last(c(), rid); push(); pushRoom(rid); },
     async openDM(other){ const id = dmId(uid(), other); if (!c().rooms[id]){ c().rooms[id] = { id, type:"dm", members:[uid(), other].sort(), createdBy: uid(), lastAt:0, lastText:"", lastUid:"" }; c().msgs[id] = []; push(); } return id; },
     async createGroup(name, uids){ const id = "g"+(++seq); c().rooms[id] = { id, type:"group", name, members:[...new Set([uid(), ...uids])], createdBy: uid(), lastAt:0, lastText:"", lastUid:"" }; c().msgs[id] = []; push(); return id; },
-    async updateGroup(rid, data){ if (data.name !== undefined) c().rooms[rid].name = data.name; if (data.members) c().rooms[rid].members = data.members; push(); },
-    async leaveGroup(rid){ c().rooms[rid].members = c().rooms[rid].members.filter(u => u !== uid()); push(); },
+    async updateGroup(rid, data){ const r = c().rooms[rid], sys = (s, w) => c().msgs[rid].push({ id:"m"+(++seq), uid: uid(), at: Date.now(), text:"", file:null, sys: s, who: w || null });
+      if (data.name !== undefined){ r.name = data.name; sys("renamed", [data.name]); }
+      if (data.members){ const add = data.members.filter(u => !r.members.includes(u)), gone = r.members.filter(u => !data.members.includes(u)); r.members = data.members; if (add.length) sys("added", add); if (gone.length) sys("removed", gone); }
+      push(); pushRoom(rid); },
+    async leaveGroup(rid){ c().msgs[rid].push({ id:"m"+(++seq), uid: uid(), at: Date.now(), text:"", file:null, sys:"left" }); c().rooms[rid].members = c().rooms[rid].members.filter(u => u !== uid()); push(); },
     async deleteGroup(rid){ delete c().rooms[rid]; delete c().msgs[rid]; push(); },
     async setRole(id, r){ c().members[id].role = r; push(); },
     async setName(n){ users[uid()].name = n; push(); },
@@ -1037,6 +1117,13 @@ function roomAvatar(r){
   return avatarHTML(nameOf(other), photoOf(other));
 }
 const seenKey = id => `seen:${S.cid}:${id}`;
+const roomPeople = r => r.type === "main" ? Object.entries(S.members).filter(([, m]) => m.role === "member" || m.role === "leader").map(([id]) => id) : (r.members || []);
+// group creator manages it; if the creator has left, any member can
+const canAdmin = r => r && ((r.type === "group" && (r.createdBy === S.user.uid || !r.members.includes(r.createdBy))) || r.type === "dm");
+function sysText(m){
+  const n = nameOf(m.uid), list = (m.who || []).map(nameOf).join(", ");
+  return { left: `${n} left the chat`, added: `${n} added ${list}`, removed: `${n} removed ${list}`, renamed: `${n} renamed the chat to “${(m.who || [])[0] || ""}”` }[m.sys] || "";
+}
 const isUnread = r => inRoom(r) && r.lastAt && r.lastUid !== S.user?.uid && r.lastAt > store.get(seenKey(r.id), 0) && S.room !== r.id;
 
 function applyTheme(t){
@@ -1078,6 +1165,7 @@ function enterChurch(cid){
   applyTheme(S.groups[cid]);
   show("scrLoading");
   api.openChurch(cid, handlers);
+  setTimeout(syncPush, 1500);
 }
 
 const handlers = {
@@ -1104,9 +1192,12 @@ const handlers = {
   contacts(map){ S.contacts = map; if (S.tab === "manage" && S.mtab === "people" && !S.room) renderManage(); },
   reports(list){ S.reports = list; if (S.tab === "manage" && S.mtab !== "look" && !S.room) renderManage(); badges(); },
   rooms(list){
+    const before = S.room ? JSON.stringify(S.rooms[S.room]?.reads || {}) + (S.rooms[S.room]?.members || []).join() : "";
     S.rooms = Object.fromEntries(list.map(r => [r.id, r]));
     if (S.room && !S.rooms[S.room]){ toast("This chat is no longer available."); closeRoom(); }
     refreshChats();
+    if (S.room && JSON.stringify(S.rooms[S.room]?.reads || {}) + (S.rooms[S.room]?.members || []).join() !== before) renderMsgs(nearBottom());
+    if (pendingOpen && S.rooms[pendingOpen]){ const id = pendingOpen; pendingOpen = null; openRoom(id); }
   }
 };
 function refreshChats(){ if (S.room) renderRoomHeader(); else if (S.tab === "chats") renderChats(); badges(); }
@@ -1216,7 +1307,7 @@ function renderHeader(){
   $("#btnInfo").classList.toggle("hidden", !inR);
   $("#btnMe").classList.toggle("hidden", inR);
   $("#btnNew").classList.toggle("hidden", inR || S.tab !== "chats");
-  $("#headBrand").innerHTML = !inR && S.tab === "ann" ? brandHTML(theme(), "sm") : "";
+  $("#headBrand").innerHTML = !inR ? `<button class="gsw" data-act="switcher" aria-label="Switch group">${brandHTML(theme(), "sm")}<span class="car">▾</span></button>` : "";
   renderMeBtn();
   if (inR) return renderRoomHeader();
   $("#viewTitle").textContent = { ann: theme()?.name || "Announcements", chats:"Chats", manage:"Manage", me:"My Profile" }[S.tab];
@@ -1257,16 +1348,57 @@ function renderChats(){
   const row = r => {
     const who = r.lastUid === S.user.uid ? "You" : nameOf(r.lastUid);
     const preview = r.locked ? "🔒 Waiting for access" : r.lastText ? (r.type !== "dm" || r.lastUid === S.user.uid ? who + ": " : "") + r.lastText : (r.type === "main" ? "Everyone in " + (theme()?.name || "the group") : "No messages yet");
-    return `<button class="room-row ${isUnread(r) ? "unread" : ""}" data-act="openRoom" data-id="${esc(r.id)}">
+    return `<button class="room-row ${isUnread(r) ? "unread" : ""}" data-act="openRoom" data-id="${esc(r.id)}" data-room="${esc(r.id)}">
       ${roomAvatar(r)}
       <div class="mid"><div class="t"><span class="nm">${esc(roomTitle(r))}</span>${r.type !== "main" ? IC.lock : ""}</div><div class="p">${esc(preview)}</div></div>
       <div class="r"><span class="when">${fmtShort(r.lastAt)}</span>${isUnread(r) ? `<span class="ud"></span>` : ""}</div>
     </button>`;
   };
+  const st = notifState();
   $("#vChats").innerHTML =
+    (st === "off" && !store.get("hidePushTip", false) ? `<div class="push-tip"><span>🔔</span><div><b>Turn on notifications</b> so you know when someone messages you.<br><button class="link-btn" data-act="pushOn" style="padding:4px 0;color:var(--accent);font-weight:700">Turn on</button> · <button class="link-btn" data-act="hidePushTip" style="padding:4px 0">Not now</button></div></div>` : "") +
     (list.length ? `<div class="rooms">${list.map(row).join("")}</div>` : `<div class="empty">No chats yet. Tap ＋ to start one.</div>`) +
-    `<div class="list-note">${IC.lock}<span>All chats are end-to-end encrypted. Private chats and groups are only visible to the people in them.</span></div>`;
+    `<div class="list-note">${IC.lock}<span>All chats are end-to-end encrypted. Private chats and groups are only visible to the people in them. Press and hold a chat for more options.</span></div>`;
 }
+// press-and-hold (or right-click) a chat in the list: leave / delete without opening it
+function openRoomMenu(id){
+  const r = S.rooms[id]; if (!r || r.type === "main") return;
+  const bg = sheet(`<h3>${esc(roomTitle(r))}</h3>
+    <button class="menu-row" data-m="open">Open</button>
+    ${r.type === "group" ? `<button class="menu-row" data-m="rename">Rename</button><button class="menu-row" data-m="leave" style="color:var(--danger)">Leave chat</button>` : ""}
+    ${canAdmin(r) ? `<button class="menu-row" data-m="del" style="color:var(--danger)">Delete chat for everyone</button>` : ""}
+    <button class="btn secondary" data-close style="margin-top:12px">Cancel</button>`);
+  bg.addEventListener("click", async e => {
+    const m = e.target.closest("[data-m]")?.dataset.m; if (!m) return;
+    bg.remove();
+    if (m === "open") openRoom(id);
+    if (m === "rename") renameRoom(r);
+    if (m === "leave") leaveRoom(r);
+    if (m === "del") deleteRoom(r);
+  });
+}
+async function renameRoom(r){
+  const bg = sheet(`<form><h3>Rename chat</h3><div class="row" style="gap:8px"><input id="rnName" maxlength="40" value="${esc(r.name)}" style="margin:0"><button type="button" class="dice" data-dice aria-label="Pick a Bible name">🎲</button></div>
+    <div class="row" style="margin-top:12px"><button type="button" class="btn secondary" data-close>Cancel</button><button class="btn accent" type="submit">Save</button></div></form>`);
+  setTimeout(() => $("#rnName")?.select(), 50);
+  bg.addEventListener("click", e => { if (e.target.closest("[data-dice]")) $("#rnName").value = randomRoomName(); });
+  bg.querySelector("form").addEventListener("submit", async e => {
+    e.preventDefault(); const n = $("#rnName").value.trim(); if (!n) return;
+    try { await api.updateGroup(r.id, { name: n }); bg.remove(); toast("Chat renamed"); } catch(err){ console.error(err); toast("Couldn't rename. Try again."); }
+  });
+}
+async function leaveRoom(r){
+  if (!await askConfirm(`Leave ${roomTitle(r)}? You won't see its messages anymore, and the others will see that you left.`, "Leave", true)) return;
+  try { if (S.room === r.id) closeRoom(); await api.leaveGroup(r.id); toast("You left the chat"); } catch(err){ console.error(err); toast("That didn't work. Try again."); }
+}
+async function deleteRoom(r){
+  if (!await askConfirm(`Delete ${roomTitle(r)} and all its messages for everyone? This can't be undone.`, "Delete", true)) return;
+  try { if (S.room === r.id) closeRoom(); toast("Deleting…"); await api.deleteGroup(r.id); toast("Chat deleted"); } catch(err){ console.error(err); toast("That didn't work. Try again."); }
+}
+let pressT = null;
+document.addEventListener("pointerdown", e => { const row = e.target.closest("[data-room]"); if (!row) return; clearTimeout(pressT); pressT = setTimeout(() => { pressT = "fired"; openRoomMenu(row.dataset.room); }, 550); });
+["pointerup","pointercancel","pointermove"].forEach(t => document.addEventListener(t, e => { if (t === "pointermove" && Math.abs(e.movementY) + Math.abs(e.movementX) < 6) return; if (pressT !== "fired") clearTimeout(pressT); }));
+document.addEventListener("click", e => { if (pressT === "fired" && e.target.closest("[data-room]")){ e.stopImmediatePropagation(); e.preventDefault(); pressT = null; } }, true);
 
 /* Room */
 let roomUnsub = null, stickBottom = true;
@@ -1280,7 +1412,7 @@ function openRoom(id, fromHistory = false){
   $("#msgList").innerHTML = "";
   renderHeader();
   stickBottom = true;
-  roomUnsub = api.watchRoom(id, list => { const stick = nearBottom(); S.msgs = list; renderMsgs(stick || stickBottom); stickBottom = false; markSeen(); });
+  roomUnsub = api.watchRoom(id, list => { const stick = nearBottom(); S.msgs = list; renderMsgs(stick || stickBottom); stickBottom = false; markSeen(); markRead(); });
   if (!fromHistory) history.pushState({ room: id }, "");
   markSeen();
 }
@@ -1291,6 +1423,15 @@ function closeRoom(silent = false){
   if (!silent){ $("#vRoom").classList.add("hidden"); setTab("chats"); }
 }
 function markSeen(){ if (S.room) store.set(seenKey(S.room), Date.now()); }
+// tell the others "read" (only when the chat is really on screen and there's something new)
+const lastMarked = {};
+function markRead(){
+  const r = S.rooms[S.room]; if (!r || document.visibilityState !== "visible") return;
+  const newest = S.msgs.reduce((a, m) => m.uid !== S.user.uid && m.at > a ? m.at : a, 0);
+  if (!newest || newest <= Math.max(r.reads?.[S.user.uid] || 0, lastMarked[r.id] || 0)) return;
+  lastMarked[r.id] = Date.now(); api.markRead(r.id);
+}
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible"){ markRead(); if (S.cid) syncPush(); } });
 function renderRoomHeader(){
   const r = S.rooms[S.room]; if (!r) return;
   const count = r.type === "main" ? Object.values(S.members).filter(m => m.role === "member" || m.role === "leader").length : r.members.length;
@@ -1311,20 +1452,24 @@ function renderMsgs(stick){
   const l = $("#msgList"); if (!l) return;
   const r = S.rooms[S.room] || {};
   let html = "", lastDay = "", prev = null;
+  const others = roomPeople(r).filter(u => u !== S.user?.uid);
+  const unreadBy = m => others.filter(u => (r.reads?.[u] || 0) < m.at && !(S.members[u]?.at > m.at)).length;
   for (const m of S.msgs){
     const day = new Date(m.at).toDateString();
     if (day !== lastDay){ html += `<div class="day">${fmtDay(m.at)}</div>`; lastDay = day; prev = null; }
+    if (m.sys){ html += `<div class="sysmsg">${esc(sysText(m))}</div>`; prev = null; continue; }
     const mine = m.uid === S.user?.uid;
+    const rc = mine && !m.locked && others.length ? unreadBy(m) : -1;
     const cont = prev && prev.uid === m.uid && m.at - prev.at < 5*60e3;
     const showWho = !mine && !cont && r.type !== "dm";
-    const canDel = mine || (isLeader() && r.type === "main") || (r.type === "group" && r.createdBy === S.user.uid);
+    const canDel = mine || (isLeader() && r.type === "main") || (r.type === "group" && canAdmin(r));
     const acts = (!mine && !m.locked ? `<button class="act" data-act="report" data-id="${esc(m.id)}">Report</button>` : "") + (canDel ? `<button class="act danger" data-act="delMsg" data-id="${esc(m.id)}">Delete</button>` : "");
     html += `<div class="msg ${mine ? "me" : ""} ${cont ? "cont" : ""}" data-msg="${esc(m.id)}">
       ${mine ? "" : avatarHTML(nameOf(m.uid), photoOf(m.uid))}
       <div class="col">${showWho ? `<div class="who">${esc(nameOf(m.uid))}${S.members[m.uid]?.role === "leader" ? ` <span class="lead">· Leader</span>` : ""}</div>` : ""}
         ${m.locked ? `<div class="bubble locked" data-sel>🔒 Waiting for access…</div>` : (m.file ? fileHTML(m.file, m.id) : "") + (m.text ? `<div class="bubble" data-sel>${esc(m.text)}</div>` : "")}
         ${acts ? `<div class="acts">${acts}</div>` : ""}</div>
-      <span class="time">${fmtTime(m.at)}</span>
+      <span class="time">${rc > 0 ? `<span class="rc" title="${rc} haven't read yet">${rc}</span>` : rc === 0 ? `<span class="rc all" title="Everyone read this">${IC.check}</span>` : ""}${fmtTime(m.at)}</span>
     </div>`;
     prev = m;
   }
@@ -1343,7 +1488,7 @@ async function loadMedia(){
   }
 }
 async function openFile(mid){
-  const m = S.msgs.find(x => x.id === mid); if (!m?.file) return;
+  const m = S.msgs.find(x => x.id === mid) || roomMediaList.find(x => x.id === mid); if (!m?.file) return;
   if (DEMO && m.file.url === "#") return toast("Files open here in the real app");
   try {
     const url = mediaUrl(m.file) || await api.fileUrl(S.room, m.file);
@@ -1477,8 +1622,89 @@ function renderMe(){
     </form>
     <div class="card"><div style="display:flex;gap:8px;align-items:center;font-weight:700">${IC.lock} End-to-end encrypted</div>
       <p class="hint" style="margin:6px 0 0">Messages and photos are locked on your device. If you sign in on a new phone or computer, your group's apps share access with it automatically.</p></div>
-    <button class="btn secondary" data-act="home">Switch group</button>
+    ${notifCard()}
+    <button class="btn secondary" data-act="switcher">Switch group</button>
     <button class="btn secondary" data-act="logout">Sign out</button>`;
+}
+
+/* Switch between groups quickly */
+function openSwitcher(){
+  const ids = Object.keys(S.groups);
+  const bg = sheet(`<h3>Your groups</h3>
+    <div class="scroll">${ids.map(id => { const g = S.groups[id]; return `<button class="menu-row" data-g="${esc(id)}">${brandHTML(g, "sm")}<span style="flex:1">${esc(g.name)}</span>${id === S.cid ? `<span style="color:var(--accent)">${IC.check}</span>` : ""}</button>`; }).join("")}
+      <button class="menu-row" data-g="__join"><span class="avatar group">${IC.plus}</span>Join another group</button>
+      <button class="menu-row" data-g="__start"><span class="avatar group">${IC.users}</span>Start a new group</button></div>
+    <button class="btn secondary" data-close style="margin-top:12px">Close</button>`);
+  bg.addEventListener("click", e => {
+    const g = e.target.closest("[data-g]")?.dataset.g; if (!g) return;
+    bg.remove();
+    if (g === "__join"){ leaveChurch(); store.set("lastGroup", null); renderHome(); setTimeout(() => $("#codeInput")?.focus(), 80); }
+    else if (g === "__start") openStartGroup();
+    else if (g !== S.cid) enterChurch(g);
+  });
+}
+
+/* Notifications (works on Android, computers, and iPhone once the app is on the Home Screen) */
+const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+const isStandalone = () => matchMedia("(display-mode: standalone)").matches || navigator.standalone;
+const pushSupported = () => "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+let vapidKey = null;
+async function getVapid(){
+  if (vapidKey) return vapidKey;
+  const r = await fetch(PUSH_API + "?key=1"); if (!r.ok) throw new Error("no-key");
+  vapidKey = (await r.json()).key; return vapidKey;
+}
+const b64u = s => { const p = "=".repeat((4 - s.length % 4) % 4), b = atob((s + p).replace(/-/g, "+").replace(/_/g, "/")); return Uint8Array.from(b, c => c.charCodeAt(0)); };
+async function currentSub(){ if (!pushSupported()) return null; const reg = await navigator.serviceWorker.ready; return reg.pushManager.getSubscription(); }
+function notifState(){
+  if (DEMO) return store.get("demoPush", false) ? "on" : "off";
+  if (!pushSupported()) return isIOS && !isStandalone() ? "install" : "unsupported";
+  if (Notification.permission === "denied") return "blocked";
+  return Notification.permission === "granted" && store.get("pushOn", false) ? "on" : "off";
+}
+async function enablePush(){
+  if (DEMO){ store.set("demoPush", true); toast("Notifications on (preview)"); return rerenderTab(); }
+  try {
+    const perm = await Notification.requestPermission();
+    if (perm !== "granted"){ toast("Notifications are blocked. You can allow them in your phone's settings."); return rerenderTab(); }
+    const reg = await navigator.serviceWorker.ready, key = await getVapid();
+    let sub = await reg.pushManager.getSubscription();
+    if (sub && btoa(String.fromCharCode(...new Uint8Array(sub.options?.applicationServerKey || []))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "") !== key){ await sub.unsubscribe().catch(() => {}); sub = null; }
+    sub = sub || await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64u(key) });
+    store.set("pushOn", true);
+    await saveSubEverywhere(sub);
+    toast("Notifications are on");
+  } catch(e){ console.error(e); toast("Couldn't turn on notifications. Try again."); }
+  rerenderTab();
+}
+async function disablePush(){
+  if (DEMO){ store.set("demoPush", false); return rerenderTab(); }
+  store.set("pushOn", false);
+  try { await api.savePush(null); const sub = await currentSub(); await sub?.unsubscribe(); } catch(e){ console.warn(e); }
+  toast("Notifications are off"); rerenderTab();
+}
+const subJSON = sub => { const j = sub.toJSON(); return { endpoint: j.endpoint, keys: { p256dh: j.keys.p256dh, auth: j.keys.auth } }; };
+async function saveSubEverywhere(sub){ await api.savePush(subJSON(sub)); store.set("pushSaved:" + S.cid, sub.endpoint); }
+// keep this group's copy of my notification address up to date (runs when a group opens)
+async function syncPush(){
+  if (DEMO || notifState() !== "on") return;
+  try { const sub = await currentSub(); if (!sub){ store.set("pushOn", false); return; } if (store.get("pushSaved:" + S.cid, "") !== sub.endpoint) await saveSubEverywhere(sub); } catch(e){ console.warn(e); }
+}
+function notifCard(){
+  const st = notifState();
+  const msg = { on: "You'll get a notification when someone sends a message or a leader posts an announcement. It never shows the message itself, just who sent it.",
+    off: "Get a notification when someone messages you or a leader posts an announcement.",
+    blocked: "Notifications are blocked for this app. Allow them in your phone or browser settings, then come back here.",
+    install: "On iPhone, notifications work once Gather is on your Home Screen. Open this page in Safari → Share → Add to Home Screen, then open it from there.",
+    unsupported: "This browser can't show notifications. Try Chrome, or add the app to your Home Screen." }[st];
+  return `<div class="card notif-card"><div style="font-weight:700">🔔 Notifications · ${st === "on" ? "On" : "Off"}</div><p class="hint" style="margin:6px 0 0">${msg}</p>
+    ${st === "on" ? `<div class="row"><button class="btn secondary" data-act="pushTest">Send me a test</button><button class="btn secondary" data-act="pushOff">Turn off</button></div>` : st === "off" ? `<div class="row"><button class="btn accent" data-act="pushOn">Turn on notifications</button></div>` : st === "install" ? `<div class="row"><a class="btn secondary" href="download.html">Show me how</a></div>` : ""}</div>`;
+}
+async function pushTest(){
+  if (DEMO) return toast("In the real app, a test notification arrives in a few seconds");
+  try { const token = await api.idToken(); const r = await fetch(PUSH_API, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token, cid: S.cid, kind: "test" }) });
+    const j = await r.json().catch(() => ({})); toast(r.ok && j.sent ? "Test sent. It should pop up in a few seconds." : "Couldn't send a test. Turn notifications off and on again."); }
+  catch(e){ console.warn(e); toast("Couldn't send a test. Check your connection."); }
 }
 
 /* Sheets */
@@ -1519,7 +1745,7 @@ function waitForRoom(id, tries = 0){ if (S.rooms[id]) return openRoom(id); if (t
 function openGroupForm(roomId){
   const r = roomId && S.rooms[roomId], chosen = new Set();
   const bg = sheet(`<h3>${r ? "Add people" : "New group"}</h3>
-    ${r ? "" : `<input id="grpName" placeholder="Group name" maxlength="40" autocomplete="off">`}
+    ${r ? "" : `<div class="row" style="gap:8px;align-items:flex-start"><input id="grpName" placeholder="Group name" maxlength="40" autocomplete="off" value="${esc(randomRoomName())}"><button type="button" class="dice" data-dice aria-label="Pick another Bible name">🎲</button></div>`}
     <div class="sheet-note">${IC.lock}<span>End-to-end encrypted. Only the people in this ${r ? "chat" : "group"} will see it.</span></div>
     <input id="pickSearch" placeholder="Search people" autocomplete="off">
     <div class="scroll" id="pickList"></div>
@@ -1533,6 +1759,7 @@ function openGroupForm(roomId){
   bg.addEventListener("click", async e => {
     const p = e.target.closest("[data-pick]");
     if (p){ const id = p.dataset.pick; chosen.has(id) ? chosen.delete(id) : chosen.add(id); p.classList.toggle("on"); sync(); return; }
+    if (e.target.closest("[data-dice]")){ $("#grpName").value = randomRoomName(); sync(); return; }
     if (!e.target.closest("#grpGo")) return;
     $("#grpGo").disabled = true;
     try {
@@ -1540,31 +1767,60 @@ function openGroupForm(roomId){
       else { const id = await api.createGroup($("#grpName").value.trim(), [...chosen]); bg.remove(); waitForRoom(id); }
     } catch(err){ sync(); toast("Couldn't save. Try again."); console.error(err); }
   });
-  setTimeout(() => ($("#grpName") || $("#pickSearch"))?.focus(), 50);
+  setTimeout(() => $("#pickSearch")?.focus(), 50);
 }
+let roomMediaList = [];
 function openRoomInfo(){
   const r = S.rooms[S.room]; if (!r) return;
-  const me = S.user.uid, canManage = r.type === "group" && r.createdBy === me;
-  const people = r.type === "main" ? Object.entries(S.members).filter(([, m]) => m.role === "member" || m.role === "leader").map(([id]) => id) : r.members;
+  const me = S.user.uid, admin = r.type === "group" && canAdmin(r);
+  const people = roomPeople(r);
   const rows = people.map(id => `<div class="pick">${avatarHTML(nameOf(id), photoOf(id))}<span class="info">${esc(nameOf(id))}${id === me ? " <small>You</small>" : S.members[id]?.role === "leader" ? "<small>Leader</small>" : ""}</span>
-      ${canManage && id !== me ? `<button class="pill no" data-kick="${esc(id)}">Remove</button>` : ""}</div>`).join("");
-  const bg = sheet(`<h3>${r.type === "group" ? "Group info" : r.type === "dm" ? "Private message" : esc(mainName())}</h3>
-    <div class="sheet-note">${IC.lock}<span>End-to-end encrypted. ${r.type === "main" ? "Everyone approved in this group can read it." : "Only the people in this chat can read it."}</span></div>
-    ${canManage ? `<div class="field"><label for="grpRename">Group name</label><div class="row"><input id="grpRename" maxlength="40" value="${esc(r.name)}" style="margin:0"><button class="pill ghost" data-rename>Save</button></div></div>` : ""}
-    <div class="sec-title" style="margin-top:4px">${people.length} people</div>
-    <div class="scroll">${canManage ? `<button class="menu-row" data-addppl><span class="avatar group">${IC.plus}</span>Add people</button>` : ""}${rows}</div>
-    ${r.type === "group" ? `<button class="btn danger" data-leave>Leave group</button>` : ""}
-    ${canManage ? `<button class="btn danger" data-delgroup style="margin-top:8px">Delete group for everyone</button>` : ""}`);
+      ${admin && id !== me ? `<button class="pill no" data-kick="${esc(id)}">Remove</button>` : ""}</div>`).join("");
+  let mtab = "media";
+  const bg = sheet(`<h3>${esc(roomTitle(r))}</h3>
+    <div class="scroll">
+      ${r.type === "group" ? `<div class="field"><label for="grpRename">Chat name</label><div class="row" style="gap:8px"><input id="grpRename" maxlength="40" value="${esc(r.name)}" style="margin:0"><button type="button" class="dice" data-dice aria-label="Pick a Bible name">🎲</button><button class="pill ghost" data-rename>Save</button></div></div>` : ""}
+      <div class="mtabs"><button data-mt="media" class="on">Photos & videos</button><button data-mt="files">Files</button><button data-mt="people">People · ${people.length}</button></div>
+      <div id="infoBody"><div class="empty" style="padding:20px">Loading…</div></div>
+      <div class="info-acts">
+        ${r.type === "group" ? `<button class="btn danger" data-leave>Leave chat</button>` : ""}
+        ${canAdmin(r) ? `<button class="btn danger" data-delgroup>Delete chat for everyone</button>` : ""}
+      </div>
+      <div class="sheet-note" style="margin-top:12px">${IC.lock}<span>End-to-end encrypted. ${r.type === "main" ? "Everyone approved in this group can read it." : "Only the people in this chat can read it."}</span></div>
+    </div>`);
+  const drawBody = () => {
+    const el = bg.querySelector("#infoBody"); if (!el) return;
+    if (mtab === "people"){ el.innerHTML = (admin ? `<button class="menu-row" data-addppl><span class="avatar group">${IC.plus}</span>Add people</button>` : "") + rows; return; }
+    const list = roomMediaList.filter(x => mtab === "media" ? /^(image|video)\//.test(x.file.type || "") : !/^(image|video)\//.test(x.file.type || ""));
+    if (!list.length){ el.innerHTML = `<div class="empty" style="padding:20px">${mtab === "media" ? "No photos or videos yet" : "No files yet"}</div>`; return; }
+    if (mtab === "files"){ el.innerHTML = `<div class="mfiles">${list.map(x => { const ext = (x.file.name.split(".").pop() || "file").slice(0, 4).toUpperCase();
+      return `<button type="button" class="filecard" data-openfile="${esc(x.id)}"><span class="fi">${esc(ext)}</span><div><div class="fn">${esc(x.file.name)}</div><div class="fs">${fmtSize(x.file.size || 0)} · ${esc(nameOf(x.uid))} · ${fmtShort(x.at)}</div></div></button>`; }).join("")}</div>`; return; }
+    el.innerHTML = `<div class="mgrid">${list.map(x => { const u = mediaUrl(x.file), vid = x.file.type.startsWith("video/");
+      return `<div class="cell" data-mcell="${esc(x.id)}">${u ? (vid ? `<video src="${esc(u)}" muted playsinline preload="metadata" data-openfile="${esc(x.id)}"></video><span class="play">▶</span>` : `<img src="${esc(u)}" alt="" data-view="${esc(u)}">`) : "🔒"}</div>`; }).join("")}</div>`;
+    loadGrid(list);
+  };
+  const loadGrid = async list => {
+    for (const x of list.slice(0, 60)){
+      if (!x.file.path || mediaUrls.has(x.file.path)) continue;
+      mediaUrls.set(x.file.path, null);
+      try { mediaUrls.set(x.file.path, await api.fileUrl(r.id, x.file)); if (document.body.contains(bg) && mtab === "media") drawBody(); }
+      catch(e){ console.warn(e); }
+    }
+  };
+  roomMediaList = [];
+  api.roomMedia(r.id).then(l => { roomMediaList = l; drawBody(); }).catch(e => { console.warn(e); roomMediaList = []; drawBody(); });
+  if (mtab === "people") drawBody();
   bg.addEventListener("click", async e => {
+    const t = e.target.closest("[data-mt]");
+    if (t){ mtab = t.dataset.mt; bg.querySelectorAll("[data-mt]").forEach(x => x.classList.toggle("on", x === t)); drawBody(); return; }
     try {
-      if (e.target.closest("[data-addppl]")){ bg.remove(); openGroupForm(r.id); }
-      else if (e.target.closest("[data-rename]")){ const n = $("#grpRename").value.trim(); if (n){ await api.updateGroup(r.id, { name: n }); toast("Group renamed"); } }
+      if (e.target.closest("[data-dice]")) $("#grpRename").value = randomRoomName();
+      else if (e.target.closest("[data-addppl]")){ bg.remove(); openGroupForm(r.id); }
+      else if (e.target.closest("[data-rename]")){ const n = $("#grpRename").value.trim(); if (n && n !== r.name){ await api.updateGroup(r.id, { name: n }); toast("Chat renamed"); } }
       else if (e.target.closest("[data-kick]")){ const id = e.target.closest("[data-kick]").dataset.kick; bg.remove();
         if (await askConfirm(`Remove ${nameOf(id)} from ${r.name}?`, "Remove", true)) await api.updateGroup(r.id, { members: r.members.filter(x => x !== id) }); }
-      else if (e.target.closest("[data-leave]")){ bg.remove();
-        if (await askConfirm(`Leave ${r.name}? You won't see its messages anymore.`, "Leave", true)){ closeRoom(); await api.leaveGroup(r.id); } }
-      else if (e.target.closest("[data-delgroup]")){ bg.remove();
-        if (await askConfirm(`Delete ${r.name} and all its messages for everyone? This can't be undone.`, "Delete", true)){ closeRoom(); await api.deleteGroup(r.id); toast("Group deleted"); } }
+      else if (e.target.closest("[data-leave]")){ bg.remove(); leaveRoom(r); }
+      else if (e.target.closest("[data-delgroup]")){ bg.remove(); deleteRoom(r); }
     } catch(err){ toast("That didn't work. Try again."); console.error(err); }
   });
 }
@@ -1616,6 +1872,11 @@ document.addEventListener("click", async e => {
     if (act === "hideTip"){ store.set("hideTip", true); renderAnn(); }
     if (act === "installNow" && installEvt){ installEvt.prompt(); const { outcome } = await installEvt.userChoice; installEvt = null; if (outcome === "accepted") store.set("hideTip", true); renderAnn(); }
     if (act === "openRoom") openRoom(id);
+    if (act === "switcher") openSwitcher();
+    if (act === "pushOn") enablePush();
+    if (act === "pushOff") disablePush();
+    if (act === "pushTest") pushTest();
+    if (act === "hidePushTip"){ store.set("hidePushTip", true); renderChats(); }
     if (act === "mtab"){ S.mtab = b.dataset.k; lookDraft = null; renderManage(); }
     if (act === "copyLink") copyText(inviteLink(S.church.invite));
     if (act === "newInvite" && await askConfirm("Make a new invite link? The old link and code will stop working.", "Make new link")){ await api.newInvite(S.church.theme, S.church.invite); toast("New invite link ready"); }
@@ -1634,7 +1895,7 @@ document.addEventListener("click", async e => {
     }
   } catch(err){ toast("That didn't work. You may not have permission."); console.error(err); }
 });
-document.addEventListener("contextmenu", e => { const m = e.target.closest(".msg"); if (!m || !m.querySelector(".acts")) return; e.preventDefault(); m.classList.add("sel"); });
+document.addEventListener("contextmenu", e => { const row = e.target.closest("[data-room]"); if (row){ e.preventDefault(); clearTimeout(pressT); pressT = null; openRoomMenu(row.dataset.room); return; } const m = e.target.closest(".msg"); if (!m || !m.querySelector(".acts")) return; e.preventDefault(); m.classList.add("sel"); });
 $("#btnLogin").addEventListener("click", () => api.login());
 $("#btnMe").addEventListener("click", () => setTab("me"));
 $("#btnNew").addEventListener("click", openNewChat);
@@ -1664,6 +1925,17 @@ document.addEventListener("submit", async e => {
 
 /* ---------- start ---------- */
 const urlInvite = new URLSearchParams(location.search).get("invite");
+// opened from a notification: go straight to that group and chat
+var pendingOpen = null;
+{ const q = new URLSearchParams(location.search), g = q.get("g");
+  if (g){ store.set("lastGroup", g); pendingOpen = q.get("room") || null; history.replaceState(null, "", location.pathname); } }
+function openFromNotice(g, room){
+  if (!g || !S.groups[g]) return;
+  if (g !== S.cid){ pendingOpen = room; enterChurch(g); }
+  else if (room && S.rooms[room]) openRoom(room);
+  else if (room === "main" || !room) setTab(room ? "chats" : "ann");
+}
+if ("serviceWorker" in navigator) navigator.serviceWorker.addEventListener("message", e => { if (e.data?.open) openFromNotice(e.data.open.g, e.data.open.room); });
 if (urlInvite) store.set("invite", normCode(urlInvite));
 S.invite = store.get("invite", null);
 function startupError(e){

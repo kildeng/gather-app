@@ -20,3 +20,8 @@
   for = "/sw.js"
   [headers.values]
     Cache-Control = "no-cache"
+
+# Notification helper (netlify/functions/notify.mjs) — free on Netlify
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
