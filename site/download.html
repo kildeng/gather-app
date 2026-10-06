@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Get Gather</title>
+<meta name="description" content="Install Gather: private, end-to-end encrypted announcements and chats for your church.">
+<meta name="theme-color" content="#1B1F3B">
+<meta property="og:title" content="Get the Gather app">
+<meta property="og:description" content="Private, end-to-end encrypted announcements and chats for your church.">
+<meta property="og:image" content="icons/icon-512.png">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" href="icons/icon-192.png">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/pretendard@1.3.9/dist/web/static/pretendard.min.css">
+<style>
+/* Layout: one narrow column, a dark hero card with the app icon, then device-specific steps */
+:root{
+  --ink:#1B1F3B; --ink-2:#4A4F6A; --ink-3:#8A8EA6;
+  --bg:#F4F2EE; --card:#FFFFFF; --line:#E6E2DA;
+  --accent:#FF6B3D; --accent-2:#FFB23F; --lock:#6B5FB5; --lock-soft:#ECE9FA; --night:#1B1F3B; --ok:#2E9E6A;
+  --accent-soft:color-mix(in srgb, var(--accent) 14%, var(--card));
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){ --ink:#F2F1F6; --ink-2:#C2C4D4; --bg:#12142A; --card:#1E2140; --line:#2D3156; --lock:#B3A8F0; --lock-soft:#2A2850; --night:#0B0C1C; color-scheme:dark; }
+}
+:root[data-theme="dark"]{ --ink:#F2F1F6; --ink-2:#C2C4D4; --bg:#12142A; --card:#1E2140; --line:#2D3156; --lock:#B3A8F0; --lock-soft:#2A2850; --night:#0B0C1C; color-scheme:dark; }
+*{box-sizing:border-box}
+html,body{margin:0}
+html{background:var(--bg)}
+body{background:var(--bg);color:var(--ink);font-family:Pretendard,-apple-system,"Apple SD Gothic Neo","Noto Sans KR",sans-serif;font-size:16px;line-height:1.55;-webkit-tap-highlight-color:transparent}
+button{font:inherit;color:inherit;border:0;background:none;cursor:pointer}
+a{color:inherit}
+button:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.wrap{max-width:520px;margin:0 auto;padding-inline:16px;padding-block:calc(16px + env(safe-area-inset-top,0px)) calc(32px + env(safe-area-inset-bottom,0px))}
+.hidden{display:none!important}
+
+.hero{background:var(--night);color:#fff;border-radius:24px;padding:28px 22px 24px;position:relative;overflow:hidden}
+.hero::before{content:"";position:absolute;width:380px;height:380px;border-radius:50%;background:radial-gradient(circle,var(--accent) 0%,transparent 65%);top:-170px;right:-170px;opacity:.55}
+.hero::after{content:"";position:absolute;width:260px;height:260px;border-radius:50%;background:radial-gradient(circle,var(--accent-2) 0%,transparent 65%);bottom:-150px;left:-120px;opacity:.28}
+.hero > *{position:relative;z-index:1}
+.appicon{width:84px;height:84px;border-radius:22px;box-shadow:0 10px 30px rgba(0,0,0,.35);display:block;object-fit:cover}
+.hero h1{font-size:40px;line-height:1.05;letter-spacing:-1.5px;margin:18px 0 6px;font-weight:900;overflow-wrap:anywhere}
+.hero p{margin:0;color:#D6D8E8;font-size:16.5px;max-width:34ch}
+.badges{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
+.badge{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:700;color:#E3E0FF;background:rgba(255,255,255,.09);padding:5px 10px;border-radius:999px}
+.badge svg{width:14px;height:14px}
+
+.invite{margin-top:14px;background:var(--card);border:1px solid var(--line);border-radius:18px;padding:16px;display:flex;gap:14px;align-items:center}
+.invite .lbl{font-size:12px;font-weight:800;letter-spacing:.6px;color:var(--ink-3)}
+.invite .code{font-size:24px;font-weight:900;letter-spacing:2px;font-variant-numeric:tabular-nums}
+.invite .sub{font-size:13px;color:var(--ink-2)}
+.invite > div{min-width:0;flex:1}
+.mini{font-size:13px;font-weight:700;padding:8px 12px;border-radius:10px;border:1px solid var(--line);background:var(--bg);white-space:nowrap}
+
+.device{display:flex;gap:4px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:4px;margin:22px 0 14px}
+.device button{flex:1;padding:10px 6px;border-radius:10px;font-weight:700;font-size:14.5px;color:var(--ink-3)}
+.device button[aria-selected="true"]{background:var(--ink);color:var(--bg)}
+
+.panel h2{font-size:22px;letter-spacing:-.4px;margin:4px 0 4px;text-wrap:balance}
+.panel .lead{color:var(--ink-2);margin:0 0 14px}
+.big{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;padding:17px;border-radius:16px;background:var(--accent);color:#fff;font-weight:800;font-size:18px;text-decoration:none}
+.big svg{width:22px;height:22px}
+.big.dark{background:var(--ink);color:var(--bg)}
+.ghost{display:block;width:100%;text-align:center;padding:14px;border-radius:14px;border:1px solid var(--line);font-weight:700;color:var(--ink-2);text-decoration:none;margin-top:10px;background:transparent}
+
+.steps{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px}
+.step{display:flex;gap:14px;align-items:flex-start;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px}
+.num{width:30px;height:30px;border-radius:50%;background:var(--accent-soft);color:var(--accent);display:flex;align-items:center;justify-content:center;font-weight:900;flex-shrink:0;font-variant-numeric:tabular-nums}
+.step b{display:block;font-size:16px}
+.step span{font-size:14px;color:var(--ink-2)}
+.step > div{min-width:0}
+.ios-ico{display:inline-flex;vertical-align:-5px;width:24px;height:24px;border-radius:6px;background:var(--bg);border:1px solid var(--line);align-items:center;justify-content:center;color:#2F7BF6;margin:0 2px}
+.ios-ico svg{width:16px;height:16px}
+
+.warn{background:color-mix(in srgb, var(--accent-2) 22%, var(--card));border-radius:16px;padding:14px 16px;margin-bottom:14px;font-size:14.5px}
+.warn b{display:block;margin-bottom:2px}
+.done{background:color-mix(in srgb, var(--ok) 14%, var(--card));border-radius:16px;padding:14px 16px;margin-bottom:14px;font-size:14.5px;color:var(--ink)}
+.linkline{font-size:13px;color:var(--ink-2);background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 12px;overflow-wrap:anywhere;user-select:all;margin:8px 0}
+
+.qrbox{display:flex;gap:18px;align-items:center;background:var(--card);border:1px solid var(--line);border-radius:18px;padding:16px;margin-top:22px}
+.qr{width:132px;height:132px;flex-shrink:0;background:#fff;border-radius:12px;padding:8px;display:flex;align-items:center;justify-content:center}
+.qr img,.qr canvas{width:116px!important;height:116px!important}
+.qrbox p{margin:0;font-size:14.5px;color:var(--ink-2)}
+.qrbox b{display:block;color:var(--ink);font-size:16px;margin-bottom:2px}
+@media (max-width:420px){ .qrbox{flex-direction:column;text-align:center} }
+
+.faq{margin-top:26px}
+.faq h3{font-size:13px;font-weight:800;letter-spacing:.6px;color:var(--ink-3);margin:0 4px 8px}
+details{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 14px;margin-bottom:8px}
+summary{font-weight:700;cursor:pointer}
+details p{margin:8px 0 2px;color:var(--ink-2);font-size:14.5px}
+.foot{margin-top:24px;text-align:center;font-size:12.5px;color:var(--ink-3)}
+.toast{position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:999px;font-size:14px;font-weight:600;z-index:10;max-width:calc(100% - 32px);text-align:center}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <section class="hero">
+    <img class="appicon" src="icons/icon-192.png" alt="Gather app icon" width="84" height="84" id="appIcon">
+    <h1 id="appName">Gather</h1>
+    <p>Private announcements and chats for your church and youth group.</p>
+    <div class="badges">
+      <span class="badge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>End-to-end encrypted</span>
+      <span class="badge">Free</span>
+      <span class="badge">iPhone & Android</span>
+    </div>
+  </section>
+
+  <div class="invite hidden" id="inviteBox">
+    <div>
+      <div class="lbl">YOUR INVITE CODE</div>
+      <div class="code" id="inviteCode"></div>
+      <div class="sub">You'll enter this after you open the app.</div>
+    </div>
+    <button class="mini" id="copyCode">Copy</button>
+  </div>
+
+  <div class="device" role="tablist" aria-label="Your phone">
+    <button role="tab" id="tabIos" aria-selected="false" data-dev="ios">iPhone / iPad</button>
+    <button role="tab" id="tabAndroid" aria-selected="false" data-dev="android">Android</button>
+  </div>
+
+  <!-- iPhone -->
+  <section class="panel hidden" id="pIos" role="tabpanel" aria-labelledby="tabIos">
+    <div class="done hidden" id="iosInstalled">✅ Gather is already on this phone. Open it from your Home Screen.</div>
+    <div class="warn hidden" id="iosNotSafari"><b>Open this page in Safari first</b>
+      You're inside another app's browser (like KakaoTalk or Instagram), which can't install apps. Tap the <b style="display:inline">⋯</b> or share menu and choose "Open in Safari", or copy the link and paste it into Safari.
+      <div class="linkline" id="iosLink"></div>
+      <button class="mini" data-copy="page">Copy link</button>
+    </div>
+    <h2>Add Gather to your Home Screen</h2>
+    <p class="lead">It takes 20 seconds. Gather then opens full screen like any other app.</p>
+    <ol class="steps">
+      <li class="step"><span class="num">1</span><div><b>Tap the Share button</b><span>At the bottom of Safari (top on iPad), the square with an arrow <span class="ios-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3M8 7l4-4 4 4"/><path d="M6 11H5a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-8a1 1 0 0 0-1-1h-1"/></svg></span></span></div></li>
+      <li class="step"><span class="num">2</span><div><b>Choose "Add to Home Screen"</b><span>Scroll down the list if you don't see it <span class="ios-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M12 8v8M8 12h8"/></svg></span></span></div></li>
+      <li class="step"><span class="num">3</span><div><b>Tap "Add"</b><span>Then open <b style="display:inline" class="appNameInline">Gather</b> from your Home Screen and sign in with Google.</span></div></li>
+    </ol>
+    <a class="ghost" id="iosBrowser" href="index.html">Or use it in the browser for now</a>
+  </section>
+
+  <!-- Android -->
+  <section class="panel hidden" id="pAndroid" role="tabpanel" aria-labelledby="tabAndroid">
+    <div class="done hidden" id="andInstalled">✅ Gather is installed. Open it from your home screen or app drawer.</div>
+    <div class="warn hidden" id="andNotChrome"><b>Open this page in Chrome first</b>
+      You're inside another app's browser (like KakaoTalk or Instagram), which can't install apps.
+      <a class="big dark" id="openChrome" href="#" style="margin-top:10px">Open in Chrome</a>
+    </div>
+    <h2>Install Gather</h2>
+    <p class="lead">Free, no app store needed, and it updates by itself.</p>
+    <button class="big" id="installBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>Install app</button>
+    <div id="andManual" class="hidden" style="margin-top:14px">
+      <p class="lead" style="margin-bottom:10px">If the button doesn't pop up an install window:</p>
+      <ol class="steps">
+        <li class="step"><span class="num">1</span><div><b>Tap Chrome's menu</b><span>The three dots ⋮ at the top right</span></div></li>
+        <li class="step"><span class="num">2</span><div><b>Tap "Install app" or "Add to Home screen"</b><span>Samsung Internet: the menu ☰ → "Add page to" → "Home screen"</span></div></li>
+        <li class="step"><span class="num">3</span><div><b>Tap "Install"</b><span>Then open <b style="display:inline" class="appNameInline">Gather</b> and sign in with Google.</span></div></li>
+      </ol>
+    </div>
+    <a class="ghost" id="andBrowser" href="index.html">Or use it in the browser for now</a>
+  </section>
+
+  <!-- Computer -->
+  <div class="qrbox hidden" id="qrBox">
+    <div class="qr" id="qr" aria-label="QR code for this page"></div>
+    <p><b>On a computer?</b>Scan this with your phone's camera to open this page there, then follow the steps for your phone.</p>
+  </div>
+
+  <section class="faq">
+    <h3>QUESTIONS</h3>
+    <details><summary>Why isn't it in the App Store?</summary><p>Gather installs straight from this page, so every church gets updates right away without waiting for app store reviews. It works the same as a store app once it's on your Home Screen.</p></details>
+    <details><summary>Is it safe?</summary><p>Yes. Messages, photos and files are encrypted on your phone before they're sent. Only the people in each chat can read them. Each church's group is private and separate, and a leader approves everyone who joins.</p></details>
+    <details><summary>Does it cost anything?</summary><p>No. It's free, and it doesn't show ads.</p></details>
+    <details><summary>How do I delete it?</summary><p>Press and hold the icon on your Home Screen, then choose Remove App (iPhone) or Uninstall (Android).</p></details>
+  </section>
+
+  <div class="foot">Gather · <a href="index.html">Open in browser</a></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script>
+(() => {
+  const $ = s => document.querySelector(s);
+  const ua = navigator.userAgent;
+  const isIOS = /iPhone|iPad|iPod/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  const isAndroid = /Android/i.test(ua);
+  const inApp = /KAKAOTALK|Instagram|FBAN|FBAV|Line\/|NAVER|DaumApps|wv\)/i.test(ua);
+  const iosSafari = isIOS && /Safari/.test(ua) && !/CriOS|FxiOS|EdgiOS/.test(ua) && !inApp;
+  const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+  const params = new URLSearchParams(location.search);
+  const invite = (params.get("invite") || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const appUrl = new URL("index.html" + (invite ? "?invite=" + invite : ""), location.href).href;
+  const pageUrl = location.href;
+
+  function toast(t){ const el = document.createElement("div"); el.className = "toast"; el.textContent = t; document.body.appendChild(el); setTimeout(() => el.remove(), 2200); }
+  async function copy(text){
+    try { await navigator.clipboard.writeText(text); toast("Copied"); }
+    catch { toast("Press and hold to copy"); }
+  }
+
+  // Invite code from the link a leader shared
+  if (invite){
+    $("#inviteBox").classList.remove("hidden");
+    $("#inviteCode").textContent = invite.replace(/(.{5})/, "$1 ");
+    $("#copyCode").addEventListener("click", () => copy(invite));
+    // keep it for the browser version of the app too
+    try { localStorage.setItem("invite", JSON.stringify(invite)); } catch {}
+  }
+  $("#iosBrowser").href = appUrl; $("#andBrowser").href = appUrl;
+  $("#iosLink").textContent = pageUrl;
+  document.querySelectorAll("[data-copy=page]").forEach(b => b.addEventListener("click", () => copy(pageUrl)));
+
+  // Device tabs
+  function pick(dev){
+    $("#tabIos").setAttribute("aria-selected", dev === "ios");
+    $("#tabAndroid").setAttribute("aria-selected", dev === "android");
+    $("#pIos").classList.toggle("hidden", dev !== "ios");
+    $("#pAndroid").classList.toggle("hidden", dev !== "android");
+  }
+  document.querySelectorAll("[data-dev]").forEach(b => b.addEventListener("click", () => pick(b.dataset.dev)));
+  pick(isIOS ? "ios" : "android");
+
+  // iPhone hints
+  if (isIOS && !iosSafari) $("#iosNotSafari").classList.remove("hidden");
+  if (isIOS && standalone) $("#iosInstalled").classList.remove("hidden");
+
+  // Android: real install prompt when Chrome offers it
+  let deferred = null;
+  if (isAndroid && inApp){
+    $("#andNotChrome").classList.remove("hidden");
+    const u = new URL(pageUrl);
+    $("#openChrome").href = `intent://${u.host}${u.pathname}${u.search}#Intent;scheme=${u.protocol.replace(":", "")};package=com.android.chrome;end`;
+  }
+  window.addEventListener("beforeinstallprompt", e => { e.preventDefault(); deferred = e; $("#andManual").classList.add("hidden"); });
+  window.addEventListener("appinstalled", () => { $("#andInstalled").classList.remove("hidden"); toast("Installed! Find Gather on your home screen."); });
+  $("#installBtn").addEventListener("click", async () => {
+    if (deferred){
+      deferred.prompt();
+      const { outcome } = await deferred.userChoice;
+      deferred = null;
+      if (outcome === "accepted") $("#andInstalled").classList.remove("hidden");
+    } else {
+      $("#andManual").classList.remove("hidden");
+      $("#andManual").scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  });
+  if (isAndroid && standalone) $("#andInstalled").classList.remove("hidden");
+
+  // Computer: show a QR code to open this page on a phone
+  if (!isIOS && !isAndroid){
+    $("#qrBox").classList.remove("hidden");
+    try { new QRCode($("#qr"), { text: pageUrl, width: 232, height: 232, colorDark: "#1B1F3B", colorLight: "#ffffff", correctLevel: QRCode.CorrectLevel.M }); }
+    catch { $("#qrBox").classList.add("hidden"); }
+  }
+
+  // Register the service worker so Chrome can offer installation from this page
+  if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
+})();
+</script>
+</body>
+</html>

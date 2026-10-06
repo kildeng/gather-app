@@ -1,0 +1,20 @@
+rules_version = '2';
+// Gather file storage rules — paste into Firebase console > Storage > Rules, then Publish.
+// (Firebase asks to let Storage read Firestore — click Allow.)
+// Files are encrypted on the phone before upload; these rules also limit who can even download the scrambled bytes.
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /churches/{cid}/rooms/{rid}/{u}/{file} {
+      function mem() { return firestore.get(/databases/(default)/documents/churches/$(cid)/members/$(request.auth.uid)).data; }
+      function room() { return firestore.get(/databases/(default)/documents/churches/$(cid)/rooms/$(rid)).data; }
+      function approved() { return request.auth != null && mem().role in ['member', 'leader']; }
+      function inRoom() { return approved() && (room().type == 'main' || request.auth.uid in room().members); }
+
+      allow read: if inRoom();
+      allow create: if inRoom() && request.auth.uid == u && request.resource.size < 26 * 1024 * 1024;
+      allow delete: if approved() && (request.auth.uid == u
+        || (rid == 'main' && mem().role == 'leader')
+        || (room().type == 'group' && room().createdBy == request.auth.uid));
+    }
+  }
+}

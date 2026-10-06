@@ -1,0 +1,22 @@
+[build]
+  publish = "site"
+  command = ""
+
+# Routes Firebase sign-in through this site so Google sign-in works in the iPhone Home Screen app
+# Firebase project: gather-48b50
+[[redirects]]
+  from = "/__/auth/*"
+  to = "https://gather-48b50.firebaseapp.com/__/auth/:splat"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/__/firebase/*"
+  to = "https://gather-48b50.firebaseapp.com/__/firebase/:splat"
+  status = 200
+  force = true
+
+[[headers]]
+  for = "/sw.js"
+  [headers.values]
+    Cache-Control = "no-cache"
