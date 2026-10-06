@@ -15,7 +15,7 @@ service cloud.firestore {
     function isLeader(cid) { return signedIn() && exists(memPath(cid)) && get(memPath(cid)).data.role == 'leader'; }
     function leaderAfter(cid) { return signedIn() && getAfter(memPath(cid)).data.role == 'leader'; }
 
-    // Personal account: encrypted key backup + list of my groups. Only me.
+    // Personal account: list of my groups. Only me.
     match /users/{u} {
       allow read, create, update: if signedIn() && uid() == u;
       allow delete: if false;
@@ -48,9 +48,9 @@ service cloud.firestore {
         allow get: if signedIn() && (uid() == u || isLeader(cid) || (isMember(cid) && resource.data.role in ['member', 'leader']));
         allow list: if isLeader(cid) || (isMember(cid) && resource.data.role in ['member', 'leader']);
         allow create: if signedIn() && uid() == u
-          && request.resource.data.keys().hasOnly(['name', 'photo', 'role', 'pub', 'fp', 'ck', 'invite', 'joinedAt'])
+          && request.resource.data.keys().hasOnly(['name', 'photo', 'role', 'devs', 'ck', 'invite', 'joinedAt'])
           && str(request.resource.data.name, 1, 30)
-          && str(request.resource.data.pub, 10, 400) && str(request.resource.data.fp, 10, 40)
+          && request.resource.data.devs is map && request.resource.data.devs.size() >= 1 && request.resource.data.devs.size() <= 10
           && request.resource.data.joinedAt == request.time
           && (
             // joining with a valid invite code → always starts as "pending"
@@ -64,10 +64,13 @@ service cloud.firestore {
               && getAfter(/databases/$(database)/documents/churches/$(cid)).data.createdBy == uid())
           );
         allow update: if
-          // me: my display name, photo and public key (new phone / new passphrase)
+          // me: my display name, photo and my devices' public keys (a new phone registers itself)
           (signedIn() && uid() == u && resource.data.role != 'removed'
-            && changed().hasOnly(['name', 'photo', 'pub', 'fp'])
-            && str(request.resource.data.name, 1, 30))
+            && changed().hasOnly(['name', 'photo', 'devs'])
+            && str(request.resource.data.name, 1, 30)
+            && request.resource.data.devs is map && request.resource.data.devs.size() <= 10)
+          // any approved member can hand the group key to another member's new device
+          || (isMember(cid) && changed().hasOnly(['ck']) && request.resource.data.ck is map)
           // leaders: approve / remove / make leader, and hand out the group key
           || (isLeader(cid) && changed().hasOnly(['role', 'ck'])
             && request.resource.data.role in ['pending', 'member', 'leader', 'removed']);

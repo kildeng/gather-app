@@ -318,8 +318,6 @@ body.in-room nav.tabs{display:none}
     </div>
   </section>
 
-  <!-- Encryption keys -->
-  <section id="scrKeys" class="screen hidden"><div class="page" id="keysPage"></div></section>
 
   <!-- Choose / join / start a group -->
   <section id="scrHome" class="screen hidden"><div class="page" id="homePage"></div></section>
@@ -395,10 +393,10 @@ const defaultTheme = name => ({ name, tagline: "Announcements & chats", accent: 
 
 /* ============================================================
    2) End-to-end encryption (runs on each phone; the server only ever sees scrambled data)
-   - Every person has a key pair. The private half never leaves their phone unencrypted;
-     a copy is locked with their recovery passphrase so they can sign in on a new phone.
+   - Every phone/computer has its own key pair. The private half never leaves that device.
+     A new device gets the keys from other members' apps automatically — nothing to type.
    - Every chat has its own secret key, handed to each member locked with that member's public key.
-   - The group-wide key (main chat + announcements) is handed out the same way by leaders.
+   - The group-wide key (main chat + announcements) is handed out the same way by members' apps.
    ============================================================ */
 const C = (() => {
   const subtle = crypto.subtle, te = new TextEncoder(), td = new TextDecoder();
@@ -579,30 +577,37 @@ async function firebaseApi(){
   const d = (...p) => F.doc(db, ...p), col = (...p) => F.collection(db, ...p);
   const ts = F.serverTimestamp;
 
-  let user = null, acct = null, K = null;                 // K = this device's keys { priv, pub, fp }
+  let user = null, acct = null, K = null;                 // K = this device's keys { priv, pub, fp, dev }
   let cid = null, H = null, subsMe = [], subsIn = [], roomSub = null;
   let myRole = null, churchKey = null, ckSeen = null, members = {}, rawAnns = [], rawReports = [], mineRooms = [], mainRoom = null;
   const roomKeyCache = {}, msgCache = new Map(), media = new Map();
   const unsubAll = a => { a.forEach(u => u()); a.length = 0; };
   const rawRoom = rid => rid === "main" ? mainRoom : mineRooms.find(x => x.id === rid);
 
-  async function saveNewKeys(pass){
-    const g = await C.genUser();
-    const backup = await C.backup(g.privJwk, pass);
-    const priv = await C.importPriv(g.privJwk);
-    await F.setDoc(d("users", user.uid), { pub: JSON.stringify(g.pub), fp: g.fp, backup }, { merge: true });
-    await keyStore.set(user.uid, { priv, pub: g.pub, fp: g.fp });
-    K = { priv, pub: g.pub, fp: g.fp };
-    acct = (await F.getDoc(d("users", user.uid))).data();
-    // tell every group about the new public key so members can share access again
-    for (const c of Object.keys(acct.groups || {}))
-      F.updateDoc(d("churches", c, "members", user.uid), { pub: JSON.stringify(K.pub), fp: K.fp }).catch(() => {});
+  // Every phone/computer makes its own key pair the first time it signs in. No passphrase:
+  // other members' apps automatically share chat keys with each new device (see heal()).
+  async function ensureKeys(){
+    let local = await keyStore.get(user.uid).catch(() => null);
+    if (!local?.dev){
+      const g = await C.genUser();
+      local = { priv: await C.importPriv(g.privJwk), pub: g.pub, fp: g.fp, dev: randCode(8) };
+      await keyStore.set(user.uid, local).catch(() => {});
+    }
+    K = local;
+  }
+  const myDevs = () => ({ [K.dev]: { pub: JSON.stringify(K.pub), fp: K.fp } });
+  const devsOf = u => u === user.uid ? { ...(members[u]?.devs || {}), ...myDevs() } : (members[u]?.devs || {});
+  // lock a key for every device a person uses (reusing locks that are still valid)
+  async function wrapForDevs(key, devs, prev = {}){
+    const out = {};
+    for (const [dev, v] of Object.entries(devs || {})){ const w = prev?.[dev]; out[dev] = w && w.for === v.fp ? w : await C.wrap(key, JSON.parse(v.pub)); }
+    return out;
   }
 
   async function roomKey(r){
     if (!r) return null;
     if (r.type === "main") return churchKey;
-    const w = r.wk?.[user.uid];
+    const w = r.wk?.[user.uid]?.[K.dev];
     if (!w || w.for !== K.fp) return null;
     const c = roomKeyCache[r.id];
     if (c && c.ct === w.ct) return c.key;
@@ -632,28 +637,34 @@ async function firebaseApi(){
   async function emitReports(){
     const list = await Promise.all(rawReports.map(async r => {
       let p = null;
-      const w = r.wk?.[user.uid];
+      const w = r.wk?.[user.uid]?.[K.dev];
       if (w && w.for === K.fp) { try { p = await C.open(await C.unwrap(w, K.priv), r); } catch {} }
       return { id: r.id, at: toMs(r.createdAt), reporter: r.reporter, locked: !p, ...(p || {}) };
     }));
     H?.reports(list);
   }
 
-  // Share keys with anyone who's missing them (newly approved people, people on a new phone)
+  // Share keys with any device that's missing them (newly approved people, new phones/computers).
+  // Any approved member who has a key can share it, so no one gets stuck.
   let healT = null;
   function heal(){ clearTimeout(healT); healT = setTimeout(healNow, 900); }
   async function healNow(){
     if (!K || !["member","leader"].includes(myRole)) return;
-    if (myRole === "leader" && churchKey){
+    if (churchKey){
       for (const [id, m] of Object.entries(members)){
-        if (!["member","leader"].includes(m.role) || !m.pub || (m.ck && m.ck.for === m.fp)) continue;
-        try { await F.updateDoc(d("churches", cid, "members", id), { ck: await C.wrap(churchKey, JSON.parse(m.pub)) }); } catch(e){ console.warn(e); }
+        if (!["member","leader"].includes(m.role)) continue;
+        const upd = {};
+        for (const [dev, v] of Object.entries(m.devs || {})) if (m.ck?.[dev]?.for !== v.fp) upd["ck." + dev] = await C.wrap(churchKey, JSON.parse(v.pub));
+        if (Object.keys(upd).length) await F.updateDoc(d("churches", cid, "members", id), upd).catch(e => console.warn(e));
       }
     }
     for (const r of mineRooms){
       const key = await roomKey(r); if (!key) continue;
       const upd = {};
-      for (const id of r.members){ const m = members[id]; if (!m?.pub || !["member","leader"].includes(m.role)) continue; const w = r.wk?.[id]; if (!w || w.for !== m.fp) upd["wk." + id] = await C.wrap(key, JSON.parse(m.pub)); }
+      for (const id of r.members){
+        if (!["member","leader"].includes(members[id]?.role)) continue;
+        for (const [dev, v] of Object.entries(devsOf(id))) if (r.wk?.[id]?.[dev]?.for !== v.fp) upd[`wk.${id}.${dev}`] = await C.wrap(key, JSON.parse(v.pub));
+      }
       if (Object.keys(upd).length) F.updateDoc(d("churches", cid, "rooms", r.id), upd).catch(e => console.warn(e));
     }
   }
@@ -666,7 +677,7 @@ async function firebaseApi(){
     const memQ = myRole === "leader" ? col(...base, "members") : F.query(col(...base, "members"), F.where("role", "in", ["member", "leader"]));
     subsIn.push(F.onSnapshot(memQ, s => {
       members = Object.fromEntries(s.docs.map(x => [x.id, x.data()]));
-      H?.members(Object.fromEntries(s.docs.map(x => { const m = x.data(); return [x.id, { name: m.name, photo: m.photo || "", role: m.role, at: toMs(m.joinedAt), fp: m.fp }]; })));
+      H?.members(Object.fromEntries(s.docs.map(x => { const m = x.data(); return [x.id, { name: m.name, photo: m.photo || "", role: m.role, at: toMs(m.joinedAt) }]; })));
       heal();
     }));
     subsIn.push(F.onSnapshot(F.query(col(...base, "rooms"), F.where("members", "array-contains", user.uid)), s => { mineRooms = s.docs.map(x => ({ id: x.id, ...x.data() })); emitRooms(); }));
@@ -686,7 +697,6 @@ async function firebaseApi(){
     for (let i = 0; i < (f.parts || 1); i++) await F.deleteDoc(F.doc(fcol(rid), f.path, "parts", String(i))).catch(() => {});
     await F.deleteDoc(F.doc(fcol(rid), f.path)).catch(() => {});
   }
-  const memberPub = u => members[u]?.pub ? JSON.parse(members[u].pub) : null;
 
   return {
     async login(){
@@ -700,17 +710,9 @@ async function firebaseApi(){
     logout(){ this.closeChurch(); return A.signOut(auth); },
     onAuth(cb){ A.onAuthStateChanged(auth, u => { user = u; K = null; acct = null; cb(u ? { uid: u.uid, email: u.email, name: u.displayName || "", photo: u.photoURL || "" } : null); }); },
     async account(){
+      await ensureKeys();
       const s = await F.getDoc(d("users", user.uid)); acct = s.exists() ? s.data() : null;
-      if (acct?.fp){ const local = await keyStore.get(user.uid).catch(() => null); K = local && local.fp === acct.fp ? local : null; }
-      return { keyStatus: K ? "ready" : acct?.backup ? "restore" : "create", groups: acct?.groups || {}, fp: acct?.fp || "" };
-    },
-    createKeys: pass => saveNewKeys(pass),
-    resetKeys: pass => saveNewKeys(pass),
-    async restoreKeys(pass){
-      const privJwk = await C.restore(acct.backup, pass);   // throws on a wrong passphrase
-      const priv = await C.importPriv(privJwk), pub = JSON.parse(acct.pub);
-      await keyStore.set(user.uid, { priv, pub, fp: acct.fp });
-      K = { priv, pub, fp: acct.fp };
+      return { keyStatus: "ready", groups: acct?.groups || {} };
     },
     async previewInvite(code){ const s = await F.getDoc(d("invites", code)).catch(() => null); return s?.exists() ? s.data() : null; },
     async joinChurch(code){
@@ -718,7 +720,7 @@ async function firebaseApi(){
       const c = inv.churchId;
       const exists = await F.getDoc(d("churches", c, "members", user.uid)).then(s => s.exists()).catch(() => false);
       const b = F.writeBatch(db);
-      if (!exists) b.set(d("churches", c, "members", user.uid), { name: (user.displayName || "New member").slice(0, 30), photo: user.photoURL || "", role: "pending", pub: JSON.stringify(K.pub), fp: K.fp, invite: code, joinedAt: ts() });
+      if (!exists) b.set(d("churches", c, "members", user.uid), { name: (user.displayName || "New member").slice(0, 30), photo: user.photoURL || "", role: "pending", devs: myDevs(), invite: code, joinedAt: ts() });
       b.set(d("churches", c, "contacts", user.uid), { email: user.email || "" });
       b.set(d("users", user.uid), { groups: { [c]: { name: inv.name, accent: inv.accent || "", logo: inv.logo || "", welcome: inv.welcome || "" } } }, { merge: true });
       await b.commit();
@@ -728,7 +730,7 @@ async function firebaseApi(){
       const c = F.doc(col("churches")).id, code = randCode(10), key = await C.newKey(), theme = defaultTheme(name);
       const b = F.writeBatch(db);
       b.set(d("churches", c), { name, createdBy: user.uid, createdAt: ts(), theme, invite: code });
-      b.set(d("churches", c, "members", user.uid), { name: (user.displayName || "Leader").slice(0, 30), photo: user.photoURL || "", role: "leader", pub: JSON.stringify(K.pub), fp: K.fp, ck: await C.wrap(key, K.pub), joinedAt: ts() });
+      b.set(d("churches", c, "members", user.uid), { name: (user.displayName || "Leader").slice(0, 30), photo: user.photoURL || "", role: "leader", devs: myDevs(), ck: { [K.dev]: await C.wrap(key, K.pub) }, joinedAt: ts() });
       b.set(d("churches", c, "contacts", user.uid), { email: user.email || "" });
       b.set(d("churches", c, "rooms", "main"), { type: "main", members: [], createdBy: user.uid, createdAt: ts() });
       b.set(d("invites", code), { churchId: c, name, tagline: theme.tagline, accent: theme.accent, logo: "", welcome: theme.welcome });
@@ -741,13 +743,21 @@ async function firebaseApi(){
       cid = c; H = handlers; myRole = null; churchKey = null; ckSeen = null; members = {};
       subsMe.push(F.onSnapshot(d("churches", c, "members", user.uid), async s => {
         const m = s.exists() ? s.data() : null;
-        if (m?.ck && m.ck.for === K.fp && m.ck.ct !== ckSeen){
-          try { churchKey = await C.unwrap(m.ck, K.priv); ckSeen = m.ck.ct; emitAnns(); emitRooms(); } catch(e){ console.warn(e); }
+        // make sure this device is listed so others can share keys with it
+        if (m && m.role !== "removed" && m.devs?.[K.dev]?.fp !== K.fp){
+          const upd = { ["devs." + K.dev]: { pub: JSON.stringify(K.pub), fp: K.fp } };
+          const others = Object.keys(m.devs || {}).filter(x => x !== K.dev);
+          if (others.length >= 8) upd["devs." + others[0]] = F.deleteField();   // keep the list short
+          F.updateDoc(d("churches", c, "members", user.uid), upd).catch(e => console.warn(e));
+        }
+        const myCk = m?.ck?.[K.dev];
+        if (myCk && myCk.for === K.fp && myCk.ct !== ckSeen){
+          try { churchKey = await C.unwrap(myCk, K.priv); ckSeen = myCk.ct; emitAnns(); emitRooms(); } catch(e){ console.warn(e); }
         }
         const role = m?.role || null, changed = role !== myRole;
         myRole = role;
         if (changed){ unsubAll(subsIn); if (role === "member" || role === "leader") attachInside(); }
-        H?.me(m ? { name: m.name, photo: m.photo || "", role: m.role, fp: m.fp } : null);
+        H?.me(m ? { name: m.name, photo: m.photo || "", role: m.role } : null);
       }, e => { console.warn(e); H?.me(null); }));
     },
     closeChurch(){ unsubAll(subsMe); unsubAll(subsIn); roomSub?.(); roomSub = null; cid = null; H = null; rawAnns = []; rawReports = []; mineRooms = []; mainRoom = null; members = {}; },
@@ -811,14 +821,14 @@ async function firebaseApi(){
       const id = dmId(user.uid, other);
       if (!mineRooms.some(r => r.id === id)){
         const key = await C.newKey(), mem = [user.uid, other].sort(), wk = {};
-        for (const u of mem) wk[u] = await C.wrap(key, u === user.uid ? K.pub : memberPub(u));
+        for (const u of mem) wk[u] = await wrapForDevs(key, devsOf(u));
         await F.setDoc(d("churches", cid, "rooms", id), { type: "dm", members: mem, createdBy: user.uid, createdAt: ts(), wk }).catch(e => console.warn(e));
       }
       return id;
     },
     async createGroup(name, uids){
       const key = await C.newKey(), mem = [...new Set([user.uid, ...uids])], wk = {};
-      for (const u of mem){ const p = u === user.uid ? K.pub : memberPub(u); if (p) wk[u] = await C.wrap(key, p); }
+      for (const u of mem) wk[u] = await wrapForDevs(key, devsOf(u));
       const ref = F.doc(col("churches", cid, "rooms"));
       await F.setDoc(ref, { type: "group", members: mem, createdBy: user.uid, createdAt: ts(), wk, nameEnc: await C.seal(key, { n: name }) });
       return ref.id;
@@ -830,7 +840,7 @@ async function firebaseApi(){
       if (mem){
         upd.members = mem;
         const wk = {};
-        for (const u of mem){ const w = r.wk?.[u], m = members[u]; if (w && (!m || w.for === m.fp)) wk[u] = w; else if (m?.pub) wk[u] = await C.wrap(key, JSON.parse(m.pub)); }
+        for (const u of mem) wk[u] = await wrapForDevs(key, devsOf(u), r.wk?.[u]);
         upd.wk = wk;
       }
       await F.updateDoc(d("churches", cid, "rooms", rid), upd);
@@ -864,7 +874,7 @@ async function firebaseApi(){
     },
     async report(payload){
       const key = await C.newKey(), wk = {};
-      for (const [id, m] of Object.entries(members)) if (m.role === "leader" && m.pub) wk[id] = await C.wrap(key, JSON.parse(m.pub));
+      for (const [id, m] of Object.entries(members)) if (m.role === "leader" && m.devs) wk[id] = await wrapForDevs(key, m.devs);
       if (!Object.keys(wk).length) throw new Error("no-leaders");
       await F.addDoc(col("churches", cid, "reports"), { reporter: user.uid, wk, ...(await C.seal(key, payload)), createdAt: ts() });
     },
@@ -889,7 +899,6 @@ function demoApi(){
   };
   const invites = { FGYG7K2Q9M: FG };
   const accounts = { me:{ [FG]:1 }, u1:{ [FG]:1 }, u4:{ [FG]:1 }, u9:{} };
-  const keysReady = { me:1, u1:1, u4:1 };
   const who = { leader:"me", member:"u1", pending:"u4", new:"u9" };
   let mode = "leader", cbAuth, cur = null, H = null, roomCb = null, roomOpen = null, seq = 100;
   const uid = () => who[mode];
@@ -953,10 +962,7 @@ function demoApi(){
     async login(){ if (!who[mode]) mode = "leader"; $("#demoRole").value = mode; cbAuth(authUser()); },
     async logout(){ mode = "out"; $("#demoRole").value = "out"; cbAuth(null); },
     onAuth(cb){ cbAuth = cb; setTimeout(() => cb(authUser()), 0); },
-    async account(){ return { keyStatus: keysReady[uid()] ? "ready" : "create", groups: groupsOf(uid()), fp:"a41c09e7d2b85f3e61d0" }; },
-    async createKeys(){ await new Promise(r => setTimeout(r, 500)); keysReady[uid()] = 1; },
-    async resetKeys(){ keysReady[uid()] = 1; },
-    async restoreKeys(){ keysReady[uid()] = 1; },
+    async account(){ return { keyStatus: "ready", groups: groupsOf(uid()) }; },
     async previewInvite(code){ const id = invites[code]; if (!id) return null; const t = churches[id].theme; return { churchId: id, name: t.name, tagline: t.tagline, accent: t.accent, logo: t.logo, welcome: t.welcome }; },
     async joinChurch(code){ const id = invites[code]; if (!id) throw new Error("bad-code"); const k = churches[id]; if (!k.members[uid()]) k.members[uid()] = { role:"pending", at: Date.now() }; accounts[uid()][id] = 1; return id; },
     async createChurch(name){
@@ -1018,7 +1024,7 @@ function applyTheme(t){
   const meta = document.querySelector('meta[name="apple-mobile-web-app-title"]'); if (meta) meta.content = t?.name || APP_NAME;
   const ti = $("#touchIcon"); if (ti) ti.href = t?.logo || "icons/apple-touch-icon.png";
 }
-function show(id){ ["scrLoading","scrLogin","scrKeys","scrHome","scrPending","scrMain"].forEach(s => $("#" + s).classList.toggle("hidden", s !== id)); }
+function show(id){ ["scrLoading","scrLogin","scrHome","scrPending","scrMain"].forEach(s => $("#" + s).classList.toggle("hidden", s !== id)); }
 
 /* ---------- routing ---------- */
 async function onAuth(user){
@@ -1026,13 +1032,12 @@ async function onAuth(user){
   S.user = user;
   if (!user){ S.keyStatus = null; renderLogin(); return; }
   show("scrLoading");
-  try { const a = await api.account(); S.keyStatus = a.keyStatus; S.groups = a.groups; S.fp = a.fp; }
+  try { const a = await api.account(); S.keyStatus = a.keyStatus; S.groups = a.groups; }
   catch(e){ console.error(e); toast("Couldn't load your account. Check your connection."); return; }
   route();
 }
 function route(){
   if (!S.user) return renderLogin();
-  if (S.keyStatus !== "ready") return renderKeys();
   if (S.invite) return renderHome();
   if (S.cid) return;
   const last = store.get("lastGroup", null), ids = Object.keys(S.groups);
@@ -1096,55 +1101,6 @@ function renderLogin(){
     ${info?.welcome ? `<div class="welcome">${esc(info.welcome)}</div>` : ""}
     <div class="e2e">${IC.lock} End-to-end encrypted</div>`;
   $("#loginFine").textContent = info ? `Sign in to ask to join ${t.name}. A leader will approve you.` : "Every group is private and separate. Messages are end-to-end encrypted.";
-}
-
-/* ---------- encryption keys ---------- */
-function renderKeys(reset = false){
-  show("scrKeys");
-  const restore = S.keyStatus === "restore" && !reset;
-  $("#keysPage").innerHTML = restore ? `
-    <div class="lockhero">${IC.lock}</div>
-    <h2>Unlock your messages</h2>
-    <p class="lead">You're signing in on a new phone or browser. Enter your recovery passphrase to read your encrypted chats here.</p>
-    <form id="keyForm">
-      <div class="field"><label for="kp1">Recovery passphrase</label><input id="kp1" type="password" autocomplete="current-password" required></div>
-      <div class="err" id="keyErr"></div>
-      <button class="btn accent" type="submit" id="keyGo">Unlock</button>
-    </form>
-    <button class="linkish" data-act="forgotKey">Forgot it? Start fresh</button>
-    <button class="linkish" data-act="logout">Use a different account</button>` : `
-    <div class="lockhero">${IC.lock}</div>
-    <h2>${reset ? "Choose a new passphrase" : "Set a recovery passphrase"}</h2>
-    <p class="lead">${reset ? "Your groups will share access to your chats again the next time another member opens the app." : "Your messages are end-to-end encrypted on your phone. No one else can read them, not the app maker and not your leaders. This passphrase unlocks them if you sign in on a new phone."}</p>
-    <form id="keyForm">
-      <div class="field"><label for="kp1">Passphrase</label><input id="kp1" type="password" autocomplete="new-password" required>
-        <div class="hint">At least 8 characters. A short sentence works well, like "pizza on friday night".</div></div>
-      <div class="field"><label for="kp2">Type it again</label><input id="kp2" type="password" autocomplete="new-password" required></div>
-      <div class="err" id="keyErr"></div>
-      <button class="btn accent" type="submit" id="keyGo">Save passphrase</button>
-    </form>
-    <p class="hint" style="margin-top:14px">Nobody can look it up for you later, so write it down somewhere safe.</p>
-    <button class="linkish" data-act="logout">Use a different account</button>`;
-  $("#keyForm").addEventListener("submit", async e => {
-    e.preventDefault();
-    const p1 = $("#kp1").value, p2 = $("#kp2")?.value, err = $("#keyErr"), go = $("#keyGo");
-    err.textContent = "";
-    if (!restore){
-      if (p1.length < 8) return err.textContent = "Use at least 8 characters.";
-      if (p1 !== p2) return err.textContent = "The two passphrases don't match.";
-    }
-    go.disabled = true; go.textContent = restore ? "Unlocking…" : "Setting up encryption…";
-    try {
-      if (restore) await api.restoreKeys(p1); else if (reset) await api.resetKeys(p1); else await api.createKeys(p1);
-      S.keyStatus = "ready"; route();
-    } catch(ex){
-      console.warn(ex); go.disabled = false; go.textContent = restore ? "Unlock" : "Save passphrase";
-      err.textContent = restore ? "That passphrase didn't work. Check it and try again." : "Couldn't save. Check your connection and try again.";
-    }
-  });
-}
-async function forgotKey(){
-  if (await askConfirm("Start fresh with a new passphrase? Your groups will share access to existing chats again once another member opens the app. A chat where nobody else is left can't be recovered.", "Start fresh", true)) renderKeys(true);
 }
 
 /* ---------- home: my groups, join, start ---------- */
@@ -1487,7 +1443,7 @@ function bindLook(){
 
 /* My profile */
 function renderMe(){
-  const p = S.me || {}, fp = (p.fp || S.fp || "").match(/.{1,4}/g)?.join(" ") || "";
+  const p = S.me || {};
   $("#vMe").innerHTML = `
     <div class="card" style="display:flex;gap:14px;align-items:center">
       ${avatarHTML(p.name, p.photo).replace('class="avatar "','class="avatar" style="width:56px;height:56px;font-size:20px"')}
@@ -1499,7 +1455,7 @@ function renderMe(){
       <button class="btn" type="submit">Save</button>
     </form>
     <div class="card"><div style="display:flex;gap:8px;align-items:center;font-weight:700">${IC.lock} End-to-end encrypted</div>
-      <p class="hint" style="margin:6px 0 0">Your security code: <b style="font-variant-numeric:tabular-nums">${esc(fp)}</b><br>Friends can compare codes in person to be sure no one is pretending to be you.</p></div>
+      <p class="hint" style="margin:6px 0 0">Messages and photos are locked on your device. If you sign in on a new phone or computer, your group's apps share access with it automatically.</p></div>
     <button class="btn secondary" data-act="home">Switch group</button>
     <button class="btn secondary" data-act="logout">Sign out</button>`;
 }
@@ -1635,7 +1591,6 @@ document.addEventListener("click", async e => {
     if (act === "join") joinWithInvite();
     if (act === "clearInvite"){ clearInvite(); renderHome(); }
     if (act === "startGroup") openStartGroup();
-    if (act === "forgotKey") forgotKey();
     if (act === "newAnn") openAnnSheet();
     if (act === "hideTip"){ store.set("hideTip", true); renderAnn(); }
     if (act === "installNow" && installEvt){ installEvt.prompt(); const { outcome } = await installEvt.userChoice; installEvt = null; if (outcome === "accepted") store.set("hideTip", true); renderAnn(); }
