@@ -12,7 +12,7 @@ const ev = id => `churches/${cid}/events/${id}`;
 const pr = id => `churches/${cid}/prayers/${id}`;
 const box = { iv: 'aXY=', ct: 'ZW5jcnlwdGVk' };   // stands in for end-to-end encrypted content
 const newEvent = (uid, patch = {}) => ({ uid, startAt: Timestamp.fromMillis(Date.now() + 864e5), ...box, rsvp: {}, createdAt: serverTimestamp(), updatedAt: serverTimestamp(), ...patch });
-const newPrayer = (uid, privacy = 'group', patch = {}) => ({ uid, privacy, status: 'active', prayedCount: 0, ...box, createdAt: serverTimestamp(), answeredAt: null, ...patch });
+const newPrayer = (uid, privacy = 'group', patch = {}) => ({ uid, anon: false, privacy, status: 'active', prayedCount: 0, ...box, createdAt: serverTimestamp(), answeredAt: null, ...patch });
 const pray = async (uid, id) => { const f = db(uid), b = writeBatch(f); b.set(doc(f, pr(id) + '/responses/' + uid), { createdAt: serverTimestamp() }); b.update(doc(f, pr(id)), { prayedCount: increment(1) }); return b.commit(); };
 
 before(async () => {
@@ -26,7 +26,7 @@ before(async () => {
     for (const [uid, role] of Object.entries(roles)) await setDoc(doc(f, `churches/${cid}/members/${uid}`), { name: uid, role });
     await setDoc(doc(f, `churches/${other}/members/otherLeader`), { name: 'otherLeader', role: 'leader' });
     await setDoc(doc(f, ev('e1')), { uid: 'leader', startAt: Timestamp.fromMillis(Date.now() + 864e5), ...box, rsvp: { member2: 'maybe' }, createdAt: Timestamp.now(), updatedAt: Timestamp.now() });
-    const seed = (uid, privacy) => ({ uid, privacy, status: 'active', prayedCount: 0, ...box, createdAt: Timestamp.now(), answeredAt: null });
+    const seed = (uid, privacy) => ({ uid, anon: false, privacy, status: 'active', prayedCount: 0, ...box, createdAt: Timestamp.now(), answeredAt: null });
     await setDoc(doc(f, pr('open')), seed('member', 'group'));
     await setDoc(doc(f, pr('private')), seed('member', 'leaders'));
     await setDoc(doc(f, `churches/${other}/prayers/x`), seed('otherLeader', 'group'));
@@ -124,4 +124,73 @@ test('a leader deleting the whole group can clear prayer records; members cannot
   await assertFails(getDocs(collection(db('member'), pr('open') + '/responses')));
   await assertSucceeds(getDocs(collection(db('leader'), pr('open') + '/responses')));
   await assertSucceeds(deleteDoc(doc(db('leader'), pr('open') + '/responses/member2')));
+});
+
+// ---------- anonymous posts, devotions, likes, comments ----------
+const dv = id => `churches/${cid}/devotions/${id}`;
+const own = id => `churches/${cid}/owners/${id}`;
+const newDevotion = (uid, patch = {}) => ({ uid, anon: false, ...box, likeCount: 0, createdAt: serverTimestamp(), ...patch });
+const postAnon = async (who, path, id, data) => { const f = db(who), b = writeBatch(f); b.set(doc(f, path), { ...data, uid: null, anon: true }); b.set(doc(f, own(id)), { uid: who }); return b.commit(); };
+test('anonymous prayer: nobody else can see who wrote it, but the author can still manage it', async () => {
+  await assertSucceeds(postAnon('member2', pr('anon1'), 'anon1', newPrayer(null)));
+  const seen = await getDoc(doc(db('leader'), pr('anon1')));
+  if (seen.data().uid !== null || seen.data().anon !== true) throw new Error('author leaked');
+  await assertFails(getDoc(doc(db('leader'), own('anon1'))));                                              // even leaders can't see the owner
+  await assertFails(getDocs(collection(db('leader'), `churches/${cid}/owners`)));
+  await assertSucceeds(getDocs(query(collection(db('member2'), `churches/${cid}/owners`), where('uid', '==', 'member2'))));
+  await assertSucceeds(updateDoc(doc(db('member2'), pr('anon1')), { status: 'answered', answeredAt: serverTimestamp(), ...box }));
+  await assertFails(updateDoc(doc(db('member'), pr('anon1')), { iv: 'eA==', ct: 'eA==' }));
+  // anonymous + leaders only: the author can still open it
+  await assertSucceeds(postAnon('member2', pr('anon2'), 'anon2', newPrayer(null, 'leaders')));
+  await assertSucceeds(getDoc(doc(db('member2'), pr('anon2'))));
+  await assertFails(getDoc(doc(db('member'), pr('anon2'))));
+  await assertSucceeds(deleteDoc(doc(db('member2'), pr('anon2'))));
+});
+test('anonymous posts cannot be forged or claimed by someone else', async () => {
+  await assertFails(setDoc(doc(db('member'), pr('anon3')), newPrayer(null, 'group', { anon: true })));       // no owner record
+  { const f = db('member'), b = writeBatch(f); b.set(doc(f, pr('anon4')), newPrayer(null, 'group', { anon: true })); b.set(doc(f, own('anon4')), { uid: 'member2' }); await assertFails(b.commit()); }
+  await assertFails(setDoc(doc(db('member'), own('open')), { uid: 'member' }));                              // claim an existing post
+  await assertFails(setDoc(doc(db('member'), own('lonely')), { uid: 'member' }));                            // owner record without a post
+  await assertFails(setDoc(doc(db('member'), pr('anon5')), newPrayer('member2', 'group')));                  // signed as someone else
+  await assertFails(postAnon('pending', pr('anon6'), 'anon6', newPrayer(null)));
+});
+test('devotions: members share (signed or anonymous); outsiders cannot read or post', async () => {
+  await assertSucceeds(setDoc(doc(db('member'), dv('d1')), newDevotion('member')));
+  await assertSucceeds(postAnon('member2', dv('d2'), 'd2', newDevotion(null)));
+  await assertSucceeds(getDocs(collection(db('leader'), `churches/${cid}/devotions`)));
+  for (const uid of ['pending', 'removed', 'otherLeader']) await assertFails(getDoc(doc(db(uid), dv('d1'))));
+  await assertFails(setDoc(doc(db('pending'), dv('d3')), newDevotion('pending')));
+  await assertFails(setDoc(doc(db('member'), dv('d4')), newDevotion('member', { likeCount: 9 })));
+  await assertFails(setDoc(doc(db('member'), dv('d5')), newDevotion('member', { body: 'plain text' })));
+  await assertSucceeds(updateDoc(doc(db('member2'), dv('d2')), { iv: 'bmV3', ct: 'ZWRpdGVk' }));             // anonymous author edits
+  await assertFails(updateDoc(doc(db('member'), dv('d2')), { iv: 'bmV3', ct: 'aGFjaw==' }));
+  await assertFails(deleteDoc(doc(db('member'), dv('d2'))));
+});
+test('likes: once per person, can be undone, and the count cannot be forged', async () => {
+  const like = (u, id, n = 1) => { const f = db(u), b = writeBatch(f); b.set(doc(f, dv(id) + '/likes/' + u), { createdAt: serverTimestamp() }); b.update(doc(f, dv(id)), { likeCount: increment(n) }); return b.commit(); };
+  const unlike = (u, id) => { const f = db(u), b = writeBatch(f); b.delete(doc(f, dv(id) + '/likes/' + u)); b.update(doc(f, dv(id)), { likeCount: increment(-1) }); return b.commit(); };
+  await assertSucceeds(like('member2', 'd1'));
+  await assertFails(like('member2', 'd1'));
+  await assertSucceeds(like('leader', 'd1'));
+  await assertFails(like('member', 'd1', 3));
+  await assertFails(updateDoc(doc(db('member'), dv('d1')), { likeCount: increment(1) }));
+  await assertFails(unlike('member', 'd1'));                                                                 // never liked
+  await assertSucceeds(unlike('member2', 'd1'));
+  await assertFails(deleteDoc(doc(db('member'), dv('d1') + '/likes/leader')));
+  const snap = await getDoc(doc(db('member'), dv('d1')));
+  if (snap.data().likeCount !== 1) throw new Error('expected 1 like, got ' + snap.data().likeCount);
+});
+test('comments: members comment (signed or anonymous) on existing devotions; only the author or a leader deletes', async () => {
+  const c = (uid, patch = {}) => ({ did: 'd1', uid, anon: false, ...box, createdAt: serverTimestamp(), ...patch });
+  const cm = id => `churches/${cid}/devComments/${id}`;
+  await assertSucceeds(setDoc(doc(db('member2'), cm('c1')), c('member2')));
+  await assertSucceeds(postAnon('member', cm('c2'), 'c2', c(null)));
+  await assertFails(setDoc(doc(db('member'), cm('c3')), c('member', { did: 'nope' })));
+  await assertFails(setDoc(doc(db('pending'), cm('c4')), c('pending')));
+  await assertFails(setDoc(doc(db('member'), cm('c5')), c('member2')));
+  await assertSucceeds(getDocs(collection(db('member'), `churches/${cid}/devComments`)));
+  await assertFails(getDocs(collection(db('otherLeader'), `churches/${cid}/devComments`)));
+  await assertFails(deleteDoc(doc(db('member'), cm('c1'))));
+  await assertSucceeds(deleteDoc(doc(db('member'), cm('c2'))));                                              // anonymous author
+  await assertSucceeds(deleteDoc(doc(db('leader'), cm('c1'))));                                              // moderation
 });

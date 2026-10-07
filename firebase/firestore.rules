@@ -68,22 +68,48 @@ service cloud.firestore {
         allow delete: if isLeader(cid);
       }
 
-      // "Leaders Only" prayer requests are returned only to their author and the group's leaders —
-      // enforced here, not by hiding them in the app.
-      function canSeePrayer(p) { return isMember(cid) && (p.privacy == 'group' || p.uid == uid() || isLeader(cid)); }
+      // Anonymous posts: the post itself carries no author (uid is null), so other members — leaders
+      // included — can't tell who wrote it. A private "owner" record, readable only by its author, lets
+      // the author manage the post. Every post/comment id is random, and an owner record can only be
+      // created together with the brand-new post it belongs to.
+      function ownerPath(id) { return /databases/$(database)/documents/churches/$(cid)/owners/$(id); }
+      function ownsNow(id) { return exists(ownerPath(id)) && get(ownerPath(id)).data.uid == uid(); }
+      function ownsAfter(id) { return getAfter(ownerPath(id)).data.uid == uid(); }
+      // a new post is either signed (uid = me, anon = false) or anonymous (uid = null + my owner record)
+      function authorship(id) {
+        return (request.resource.data.anon == false && request.resource.data.uid == uid())
+          || (request.resource.data.anon == true && request.resource.data.uid == null && ownsAfter(id));
+      }
+      function isAuthor(id) { return resource.data.uid == uid() || (resource.data.get('anon', false) == true && ownsNow(id)); }
+      match /owners/{id} {
+        allow get, list: if signedIn() && resource.data.uid == uid();
+        allow create: if isMember(cid) && request.resource.data.keys().hasOnly(['uid', 'kind']) && request.resource.data.uid == uid()
+          && (!('kind' in request.resource.data) || request.resource.data.kind in ['prayer', 'devotion', 'comment'])
+          && !exists(/databases/$(database)/documents/churches/$(cid)/prayers/$(id))
+          && !exists(/databases/$(database)/documents/churches/$(cid)/devotions/$(id))
+          && !exists(/databases/$(database)/documents/churches/$(cid)/devComments/$(id))
+          && (existsAfter(/databases/$(database)/documents/churches/$(cid)/prayers/$(id))
+            || existsAfter(/databases/$(database)/documents/churches/$(cid)/devotions/$(id))
+            || existsAfter(/databases/$(database)/documents/churches/$(cid)/devComments/$(id)));
+        allow delete: if signedIn() && resource.data.uid == uid();
+      }
+
+      // Prayer requests — anyone in the group can post, signed or anonymously.
+      // "Leaders Only" requests are returned only to their author and the group's leaders.
+      function canSeePrayer(p, id) { return isMember(cid) && (p.privacy == 'group' || isLeader(cid) || p.uid == uid() || (p.get('anon', false) == true && ownsNow(id))); }
       match /prayers/{pid} {
         function prayerPath() { return /databases/$(database)/documents/churches/$(cid)/prayers/$(pid); }
         function responsePath() { return /databases/$(database)/documents/churches/$(cid)/prayers/$(pid)/responses/$(request.auth.uid); }
-        function authorOrLeader() { return isMember(cid) && (resource.data.uid == uid() || isLeader(cid)); }
-        allow read: if canSeePrayer(resource.data);
+        function authorOrLeader() { return isMember(cid) && (isLeader(cid) || isAuthor(pid)); }
+        allow read: if canSeePrayer(resource.data, pid);
         allow create: if isMember(cid)
-          && request.resource.data.keys().hasOnly(['uid', 'privacy', 'status', 'prayedCount', 'iv', 'ct', 'createdAt', 'answeredAt'])
-          && request.resource.data.uid == uid()
+          && request.resource.data.keys().hasOnly(['uid', 'anon', 'privacy', 'status', 'prayedCount', 'iv', 'ct', 'createdAt', 'answeredAt'])
+          && authorship(pid)
           && request.resource.data.privacy in ['group', 'leaders']
           && request.resource.data.status == 'active' && request.resource.data.prayedCount == 0
           && request.resource.data.iv is string && str(request.resource.data.ct, 1, 20000)
           && request.resource.data.createdAt == request.time && request.resource.data.answeredAt == null;
-        allow update: if canSeePrayer(resource.data) && (
+        allow update: if canSeePrayer(resource.data, pid) && (
             // "I Prayed": +1 exactly once per person, together with that person's response record
             (changed().hasOnly(['prayedCount'])
               && request.resource.data.prayedCount == resource.data.prayedCount + 1
@@ -98,19 +124,61 @@ service cloud.firestore {
               && changed().hasOnly(['iv', 'ct']) && str(request.resource.data.ct, 1, 20000))
           );
         allow delete: if authorOrLeader();
-
-        // one record per person (document id = their uid), so "I Prayed" can't be counted twice;
-        // who prayed stays private to each person
+        // one record per person (document id = their uid): "I Prayed" can't be counted twice; who prayed stays private
         match /responses/{u} {
           allow get: if signedIn() && u == uid();
           allow list: if isLeader(cid);                      // only used when a leader deletes the whole group
           allow create: if signedIn() && u == uid()
-            && canSeePrayer(get(prayerPath()).data)
+            && canSeePrayer(get(prayerPath()).data, pid)
             && request.resource.data.keys().hasOnly(['createdAt']) && request.resource.data.createdAt == request.time
             && getAfter(prayerPath()).data.prayedCount == get(prayerPath()).data.prayedCount + 1;
           allow update: if false;
           allow delete: if isLeader(cid);
         }
+      }
+
+      // Today's devotion — anyone in the group can share one (signed or anonymous); everyone in the group
+      // can like it once and comment.
+      match /devotions/{did} {
+        function devPath() { return /databases/$(database)/documents/churches/$(cid)/devotions/$(did); }
+        function likePath() { return /databases/$(database)/documents/churches/$(cid)/devotions/$(did)/likes/$(request.auth.uid); }
+        allow read: if isMember(cid);
+        allow create: if isMember(cid)
+          && request.resource.data.keys().hasOnly(['uid', 'anon', 'iv', 'ct', 'likeCount', 'createdAt'])
+          && authorship(did)
+          && request.resource.data.iv is string && str(request.resource.data.ct, 1, 30000)
+          && request.resource.data.likeCount == 0 && request.resource.data.createdAt == request.time;
+        allow update: if isMember(cid) && (
+            // like: +1 with my like record; unlike: -1 removing it
+            (changed().hasOnly(['likeCount']) && request.resource.data.likeCount == resource.data.likeCount + 1
+              && !exists(likePath()) && existsAfter(likePath()))
+            || (changed().hasOnly(['likeCount']) && request.resource.data.likeCount == resource.data.likeCount - 1
+              && exists(likePath()) && !existsAfter(likePath()))
+            // the author edits the text
+            || (isAuthor(did) && changed().hasOnly(['iv', 'ct']) && str(request.resource.data.ct, 1, 30000))
+          );
+        allow delete: if isMember(cid) && (isLeader(cid) || isAuthor(did));
+        match /likes/{u} {
+          allow get: if signedIn() && u == uid();
+          allow list: if isLeader(cid);
+          allow create: if isMember(cid) && u == uid()
+            && request.resource.data.keys().hasOnly(['createdAt']) && request.resource.data.createdAt == request.time
+            && getAfter(devPath()).data.likeCount == get(devPath()).data.likeCount + 1;
+          allow delete: if (signedIn() && u == uid() && isMember(cid)
+              && existsAfter(devPath()) && getAfter(devPath()).data.likeCount == get(devPath()).data.likeCount - 1)
+            || isLeader(cid);
+        }
+      }
+      match /devComments/{id} {
+        allow read: if isMember(cid);
+        allow create: if isMember(cid)
+          && request.resource.data.keys().hasOnly(['did', 'uid', 'anon', 'iv', 'ct', 'createdAt'])
+          && exists(/databases/$(database)/documents/churches/$(cid)/devotions/$(request.resource.data.did))
+          && authorship(id)
+          && request.resource.data.iv is string && str(request.resource.data.ct, 1, 5000)
+          && request.resource.data.createdAt == request.time;
+        allow update: if false;
+        allow delete: if isMember(cid) && (isLeader(cid) || isAuthor(id));
       }
 
       match /members/{u} {

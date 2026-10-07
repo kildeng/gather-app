@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { validateEvent, validatePrayer, prayerQueries, rsvpSummary, EVENT_KINDS, PRAYER_CATEGORIES } from '../site/small-groups.js';
+import { validateEvent, validatePrayer, validateDevotion, validateComment, dayLabel, prayerQueries, rsvpSummary, EVENT_KINDS, PRAYER_CATEGORIES } from '../site/small-groups.js';
 
 test('events need a type, title and date; text lengths are limited', () => {
   const ok = { kind: 'Meeting', title: 'Friday Night Gathering', location: 'Room 2', description: '', startAt: Date.now() };
@@ -9,10 +9,10 @@ test('events need a type, title and date; text lengths are limited', () => {
   for (const patch of [{ kind: 'Party' }, { title: ' ' }, { title: 'x'.repeat(81) }, { location: 'x'.repeat(161) }, { description: 'x'.repeat(1001) }, { startAt: NaN }]) assert.throws(() => validateEvent({ ...ok, ...patch }));
 });
 test('prayer requests need a title, request, known category and privacy level', () => {
-  const ok = { title: 'School', request: 'Please pray for an important exam this week.', category: 'School', privacy: 'group' };
+  const ok = { title: 'School', request: 'Please pray for an important exam this week.', category: 'School', privacy: 'group', anon: false };
   assert.equal(validatePrayer(ok), ok);
   assert.deepEqual([...PRAYER_CATEGORIES], ['Personal', 'Family', 'Health', 'School', 'Work', 'Faith', 'Other']);
-  for (const patch of [{ title: '' }, { request: 'x'.repeat(1001) }, { category: 'Gossip' }, { privacy: 'public' }]) assert.throws(() => validatePrayer({ ...ok, ...patch }));
+  for (const patch of [{ title: '' }, { request: 'x'.repeat(1001) }, { category: 'Gossip' }, { privacy: 'public' }, { anon: 'yes' }]) assert.throws(() => validatePrayer({ ...ok, ...patch }));
 });
 test('members only ask the server for group-wide prayers and their own; leaders for all', () => {
   assert.deepEqual(prayerQueries(true), [[]]);
@@ -22,4 +22,18 @@ test('RSVP summary counts only current members and ignores unknown answers', () 
   const members = { a: { role: 'member' }, b: { role: 'leader' }, c: { role: 'removed' }, d: { role: 'member' } };
   assert.deepEqual(rsvpSummary({ a: 'going', b: 'maybe', c: 'going', d: 'no', e: 'going', a2: 'weird' }, members), { going: ['a'], maybe: ['b'], no: ['d'] });
   assert.deepEqual(rsvpSummary(undefined, members), { going: [], maybe: [], no: [] });
+});
+test('devotions need a reflection; reference and verse are optional; comments are limited', () => {
+  const ok = { ref: 'Psalm 23:1', verse: 'The Lord is my shepherd', body: 'God knows what I need.', anon: true };
+  assert.equal(validateDevotion(ok), ok);
+  assert.equal(validateDevotion({ ...ok, ref: '', verse: '' }).body, ok.body);
+  for (const patch of [{ body: ' ' }, { body: 'x'.repeat(3001) }, { ref: 'x'.repeat(101) }, { verse: 'x'.repeat(1501) }, { anon: undefined }]) assert.throws(() => validateDevotion({ ...ok, ...patch }));
+  assert.equal(validateComment('Amen!'), 'Amen!');
+  for (const bad of ['', '   ', 'x'.repeat(1001)]) assert.throws(() => validateComment(bad));
+});
+test('devotions are grouped as Today / Yesterday / date', () => {
+  const now = new Date(2026, 9, 7, 12).getTime();
+  assert.equal(dayLabel(now - 3600e3, now), 'Today');
+  assert.equal(dayLabel(now - 864e5, now), 'Yesterday');
+  assert.match(dayLabel(now - 3 * 864e5, now), /October 4|Oct 4/);
 });

@@ -49,7 +49,7 @@ export default async req => {
     if (req.method !== "POST") return json({ error: "method" }, 405);
     const { token, cid, rid = "", kind } = await req.json().catch(() => ({}));
     const uid = token && uidOf(token);
-    if (!uid || !ID.test(cid || "") || (rid && !ID.test(rid)) || !["msg", "ann", "test", "event", "prayer"].includes(kind)) return json({ error: "bad request" }, 400);
+    if (!uid || !ID.test(cid || "") || (rid && !ID.test(rid)) || !["msg", "ann", "test", "event", "prayer", "devotion", "comment"].includes(kind)) return json({ error: "bad request" }, 400);
 
     // these reads only succeed if the token is real and the sender is an approved member (security rules)
     const [church, me] = await Promise.all([get(`churches/${cid}`, token), get(`churches/${cid}/members/${uid}`, token)]);
@@ -66,12 +66,25 @@ export default async req => {
       const e = rid && await get(`churches/${cid}/events/${rid}`, token);
       if (!e || e.uid !== uid || me.role !== "leader" || Date.now() - (e.createdAt || 0) > 120000) return json({ sent: 0, skipped: "not a new event" });
       to = await approvedMembers(cid, token); body = `📅 ${who} posted a new event`; room = ""; tag = "events";
-    } else if (kind === "prayer"){
-      const p = rid && await get(`churches/${cid}/prayers/${rid}`, token);
-      if (!p || p.uid !== uid || Date.now() - (p.createdAt || 0) > 120000) return json({ sent: 0, skipped: "not a new prayer" });
-      // "Leaders Only" requests ping only the leaders
-      to = p.privacy === "leaders" ? await approvedMembers(cid, token, ["leader"]) : await approvedMembers(cid, token);
-      body = p.privacy === "leaders" ? `🙏 ${who} shared a prayer request with leaders` : `🙏 ${who} shared a prayer request`; room = ""; tag = "prayer";
+    } else if (kind === "prayer" || kind === "devotion" || kind === "comment"){
+      const coll = { prayer: "prayers", devotion: "devotions", comment: "devComments" }[kind];
+      const p = rid && await get(`churches/${cid}/${coll}/${rid}`, token);
+      // the post must be brand new and the sender's: signed with their uid, or anonymous with their private owner record
+      const mineNow = p && (p.uid === uid || (p.anon === true && (await get(`churches/${cid}/owners/${rid}`, token).catch(() => null))?.uid === uid));
+      if (!mineNow || Date.now() - (p.createdAt || 0) > 120000) return json({ sent: 0, skipped: "not a new post" });
+      const name = p.anon ? "Someone" : who;
+      room = ""; tag = kind;
+      if (kind === "prayer"){
+        // "Leaders Only" requests ping only the leaders
+        to = p.privacy === "leaders" ? await approvedMembers(cid, token, ["leader"]) : await approvedMembers(cid, token);
+        body = p.privacy === "leaders" ? `🙏 ${name} shared a prayer request with leaders` : `🙏 ${name} shared a prayer request`;
+      } else if (kind === "devotion"){
+        to = await approvedMembers(cid, token); body = `📖 ${name} shared today's devotion`;
+      } else {
+        // a comment pings the devotion's author (when it was posted with a name)
+        const dv = p.did && await get(`churches/${cid}/devotions/${p.did}`, token).catch(() => null);
+        to = dv?.uid ? [dv.uid] : []; body = `💬 ${name} commented on your devotion`;
+      }
     } else {
       const r = await get(`churches/${cid}/rooms/${rid}`, token);           // fails unless the sender is in this chat
       if (!r) return json({ error: "no room" }, 404);

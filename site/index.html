@@ -397,7 +397,7 @@ body.in-room nav.tabs{display:none}
 </div>
 
 <script type="module">
-import { createCommunityUI, prayerQueries, validateEvent, validatePrayer, rsvpSummary } from './small-groups.js';
+import { createCommunityUI, prayerQueries, validateEvent, validatePrayer, validateDevotion, validateComment } from './small-groups.js';
 /* ============================================================
    1) Firebase config — paste the values from the operator setup guide.
       While apiKey is still "YOUR_API_KEY", the app runs in preview mode.
@@ -755,28 +755,62 @@ async function firebaseApi(){
       fetch(PUSH_API, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token, cid, rid, kind }), keepalive: true }).catch(() => {});
     } catch {}
   }
-  // Small Group: events (with RSVP) and prayer requests, encrypted with the group key like announcements.
-  // Only what the security rules need stays readable: who posted, the event time, RSVPs, privacy and status.
-  let rawEvents = [], rawPrayers = [], evCb = null, prCb = null;
-  const subsCom = [];
+  // Group life: events (with RSVP), prayer requests, devotions + likes + comments — all text encrypted with the
+  // group key like announcements. Anonymous posts carry no author; a private "owner" record (readable only by
+  // its author) lets the author manage them.
+  let rawEvents = [], rawPrayers = [], rawMinePrayers = {}, rawDev = [], rawCom = [], evCb = null, prCb = null, dvCb = null, cmCb = null, myOwned = [];
+  const subsCom = [], minePrayerSubs = {};
   const comCol = n => col("churches", cid, n);
+  const openBox = r => tryOpen(churchKey, r);
   async function emitEvents(){
     if (!evCb) return;
-    const cb = evCb, list = await Promise.all(rawEvents.map(async e => { const p = await tryOpen(churchKey, e);
+    const cb = evCb, list = await Promise.all(rawEvents.map(async e => { const p = await openBox(e);
       return { id: e.id, uid: e.uid, startAt: toMs(e.startAt), rsvp: e.rsvp || {}, locked: !p, kind: p?.kind || "Event", title: p?.title || "", location: p?.location || "", description: p?.description || "" }; }));
     cb(list);
   }
   async function emitPrayers(){
     if (!prCb) return;
-    const all = new Map(); rawPrayers.flat().forEach(r => all.set(r.id, r));
-    const cb = prCb, list = await Promise.all([...all.values()].map(async r => { const p = await tryOpen(churchKey, r);
-      return { id: r.id, uid: r.uid, privacy: r.privacy, status: r.status, prayedCount: r.prayedCount || 0, createdAt: toMs(r.createdAt), answeredAt: r.answeredAt ? toMs(r.answeredAt) : 0,
+    const all = new Map(); rawPrayers.flat().concat(Object.values(rawMinePrayers)).forEach(r => all.set(r.id, r));
+    const cb = prCb, list = await Promise.all([...all.values()].map(async r => { const p = await openBox(r);
+      return { id: r.id, uid: r.uid, anon: !!r.anon, privacy: r.privacy, status: r.status, prayedCount: r.prayedCount || 0, createdAt: toMs(r.createdAt), answeredAt: r.answeredAt ? toMs(r.answeredAt) : 0,
         locked: !p, title: p?.title || "", request: p?.request || "", category: p?.category || "Other", testimony: p?.testimony || "" }; }));
     cb(list);
   }
-  function emitCommunity(){ emitEvents(); emitPrayers(); }
+  async function emitDevotions(){
+    if (!dvCb) return;
+    const cb = dvCb, list = await Promise.all(rawDev.map(async r => { const p = await openBox(r);
+      return { id: r.id, uid: r.uid, anon: !!r.anon, likeCount: r.likeCount || 0, createdAt: toMs(r.createdAt), locked: !p, ref: p?.ref || "", verse: p?.verse || "", body: p?.body || "" }; }));
+    cb(list);
+  }
+  async function emitComments(){
+    if (!cmCb) return;
+    const cb = cmCb, list = await Promise.all(rawCom.map(async r => { const p = await openBox(r);
+      return { id: r.id, did: r.did, uid: r.uid, anon: !!r.anon, createdAt: toMs(r.createdAt), locked: !p, text: p?.t || "" }; }));
+    cb(list);
+  }
+  function emitCommunity(){ emitEvents(); emitPrayers(); emitDevotions(); emitComments(); }
   const needKey = () => { if (!churchKey) throw new Error("no-key"); };
+  // a new post: signed (uid = me) or anonymous (uid = null, plus my private owner record) — written together
+  async function post(collName, data, anon, kind){
+    const ref = F.doc(comCol(collName)), b = F.writeBatch(db);
+    b.set(ref, { ...data, uid: anon ? null : user.uid, anon: !!anon });
+    if (anon) b.set(d("churches", cid, "owners", ref.id), { uid: user.uid, kind });
+    await b.commit();
+    return ref.id;
+  }
+  // my own anonymous "leaders only" prayers aren't returned by the group-wide query, so follow them one by one
+  function followMinePrayers(){
+    if (!prCb) return;
+    const want = new Set(myOwned.filter(o => o.kind === "prayer").map(o => o.id));
+    for (const id of Object.keys(minePrayerSubs)) if (!want.has(id)){ minePrayerSubs[id](); delete minePrayerSubs[id]; delete rawMinePrayers[id]; }
+    for (const id of want) if (!minePrayerSubs[id]) minePrayerSubs[id] = F.onSnapshot(d("churches", cid, "prayers", id),
+      s => { if (s.exists()) rawMinePrayers[id] = { id, ...s.data() }; else delete rawMinePrayers[id]; emitPrayers(); }, () => {});
+  }
   const community = {
+    watchMine(next, err){
+      const u = F.onSnapshot(F.query(comCol("owners"), F.where("uid", "==", user.uid)), s => { myOwned = s.docs.map(x => ({ id: x.id, kind: x.data().kind || "" })); next(myOwned.map(o => o.id)); followMinePrayers(); }, err);
+      subsCom.push(u); return u;
+    },
     watchEvents(next, err){
       evCb = next;
       const u = F.onSnapshot(F.query(comCol("events"), F.orderBy("startAt", "desc"), F.limit(100)), s => { rawEvents = s.docs.map(x => ({ id: x.id, ...x.data() })); emitEvents(); }, err);
@@ -797,13 +831,13 @@ async function firebaseApi(){
       const qs = prayerQueries(isLeader); rawPrayers = qs.map(() => []);
       const us = qs.map((f, i) => F.onSnapshot(F.query(comCol("prayers"), ...f.map(([a, op, v]) => F.where(a, op, v === "$me" ? user.uid : v))),
         s => { rawPrayers[i] = s.docs.map(x => ({ id: x.id, ...x.data() })); emitPrayers(); }, err));
-      subsCom.push(...us); return () => { us.forEach(u => u()); prCb = null; };
+      subsCom.push(...us); followMinePrayers();
+      return () => { us.forEach(u => u()); Object.values(minePrayerSubs).forEach(u => u()); for (const k in minePrayerSubs) delete minePrayerSubs[k]; prCb = null; };
     },
     async addPrayer(p){
       validatePrayer(p); needKey();
-      const ref = F.doc(comCol("prayers"));
-      await F.setDoc(ref, { uid: user.uid, privacy: p.privacy, status: "active", prayedCount: 0, ...(await C.seal(churchKey, { title: p.title, request: p.request, category: p.category, testimony: "" })), createdAt: ts(), answeredAt: null });
-      notify("prayer", ref.id);
+      const id = await post("prayers", { privacy: p.privacy, status: "active", prayedCount: 0, ...(await C.seal(churchKey, { title: p.title, request: p.request, category: p.category, testimony: "" })), createdAt: ts(), answeredAt: null }, p.anon, "prayer");
+      notify("prayer", id);
     },
     prayedByMe: async id => (await F.getDoc(d("churches", cid, "prayers", id, "responses", user.uid))).exists(),
     async pray(id){
@@ -817,7 +851,32 @@ async function firebaseApi(){
       const box = await C.seal(churchKey, { title: p.title, request: p.request, category: p.category, testimony });
       await F.updateDoc(d("churches", cid, "prayers", p.id), p.status === "answered" ? box : { ...box, status: "answered", answeredAt: ts() });
     },
-    deletePrayer: id => F.deleteDoc(d("churches", cid, "prayers", id))
+    async deletePrayer(id){ await F.deleteDoc(d("churches", cid, "prayers", id)); F.deleteDoc(d("churches", cid, "owners", id)).catch(() => {}); },
+    watchDevotions(next, err){
+      dvCb = next;
+      const u = F.onSnapshot(F.query(comCol("devotions"), F.orderBy("createdAt", "desc"), F.limit(100)), s => { rawDev = s.docs.map(x => ({ id: x.id, ...x.data() })); emitDevotions(); }, err);
+      subsCom.push(u); return () => { u(); dvCb = null; };
+    },
+    async addDevotion(v){
+      validateDevotion(v); needKey();
+      const id = await post("devotions", { ...(await C.seal(churchKey, { ref: v.ref, verse: v.verse, body: v.body })), likeCount: 0, createdAt: ts() }, v.anon, "devotion");
+      notify("devotion", id);
+    },
+    async deleteDevotion(id){ await F.deleteDoc(d("churches", cid, "devotions", id)); F.deleteDoc(d("churches", cid, "owners", id)).catch(() => {}); },
+    likedByMe: async id => (await F.getDoc(d("churches", cid, "devotions", id, "likes", user.uid))).exists(),
+    async like(id){ const b = F.writeBatch(db); b.set(d("churches", cid, "devotions", id, "likes", user.uid), { createdAt: ts() }); b.update(d("churches", cid, "devotions", id), { likeCount: F.increment(1) }); await b.commit(); },
+    async unlike(id){ const b = F.writeBatch(db); b.delete(d("churches", cid, "devotions", id, "likes", user.uid)); b.update(d("churches", cid, "devotions", id), { likeCount: F.increment(-1) }); await b.commit(); },
+    watchComments(next, err){
+      cmCb = next;
+      const u = F.onSnapshot(F.query(comCol("devComments"), F.orderBy("createdAt", "desc"), F.limit(500)), s => { rawCom = s.docs.map(x => ({ id: x.id, ...x.data() })); emitComments(); }, err);
+      subsCom.push(u); return () => { u(); cmCb = null; };
+    },
+    async addComment(did, text, anon){
+      validateComment(text); needKey();
+      const id = await post("devComments", { did, ...(await C.seal(churchKey, { t: text })), createdAt: ts() }, anon, "comment");
+      notify("comment", id);
+    },
+    async deleteComment(id){ await F.deleteDoc(d("churches", cid, "devComments", id)); F.deleteDoc(d("churches", cid, "owners", id)).catch(() => {}); }
   };
   const sysMsg = async (key, s, w) => ({ uid: user.uid, ...(await C.seal(key, { t: "", f: null, s, w: w || null })), createdAt: ts() });
 
@@ -891,7 +950,8 @@ async function firebaseApi(){
         H?.me(m && !closed ? { name: m.name, photo: m.photo || "", role: m.role } : null, !m || closed);
       }, e => { console.warn(e); H?.me(null); }));
     },
-    closeChurch(){ unsubAll(subsMe); unsubAll(subsIn); unsubAll(subsCom); evCb = prCb = null; rawEvents = []; rawPrayers = []; roomSub?.(); roomSub = null; cid = null; H = null; rawAnns = []; rawReports = []; mineRooms = []; mainRoom = null; members = {}; },
+    closeChurch(){ unsubAll(subsMe); unsubAll(subsIn); unsubAll(subsCom); Object.values(minePrayerSubs).forEach(u => u()); for (const k in minePrayerSubs) delete minePrayerSubs[k];
+      evCb = prCb = dvCb = cmCb = null; rawEvents = []; rawPrayers = []; rawMinePrayers = {}; rawDev = []; rawCom = []; myOwned = []; roomSub?.(); roomSub = null; cid = null; H = null; rawAnns = []; rawReports = []; mineRooms = []; mainRoom = null; members = {}; },
     watchRoom(rid, cb){
       roomSub?.();
       roomSub = F.onSnapshot(F.query(col("churches", cid, "rooms", rid, "messages"), F.orderBy("createdAt", "desc"), F.limit(MSG_LIMIT)), async s => {
@@ -1067,6 +1127,9 @@ async function firebaseApi(){
       onStep?.("Deleting announcements…");
       await wipe(await all(...base, "announcements"));
       await wipe(await all(...base, "events"));
+      for (const dv of await all(...base, "devotions")) await wipe(await all(...base, "devotions", dv.id, "likes"));
+      await wipe(await all(...base, "devotions"));
+      await wipe(await all(...base, "devComments"));
       for (const pr of await all(...base, "prayers")) await wipe(await all(...base, "prayers", pr.id, "responses"));
       await wipe(await all(...base, "prayers"));
       await wipe(await all(...base, "reports"));
@@ -1168,39 +1231,55 @@ function demoApi(){
     if (v === "new"){ S.invite = "MANNA-JORDAN-SHEPHERD-27"; S.inviteInfo = null; } else { S.invite = null; S.inviteInfo = null; }
     cbAuth(authUser());
   });
-  // Small Group sample data (memory only)
+  // Group-life sample data (memory only)
   const at = (days, h, m = 0) => { const x = new Date(); x.setDate(x.getDate() + days); x.setHours(h, m, 0, 0); return x.getTime(); };
   const com = { events: [
       { id:"e1", uid:"me", kind:"Meeting", title:"Friday Night Gathering", location:"Education Building, 2nd floor", description:"Dinner first, then worship and small group time 🍕", startAt: at((5 - new Date().getDay() + 7) % 7 || 7, 19, 30), rsvp:{ u1:"going", u2:"going", u3:"maybe", u6:"no" } },
       { id:"e2", uid:"me", kind:"Worship", title:"Sunday Youth Worship", location:"Main sanctuary", description:"", startAt: at((7 - new Date().getDay()) % 7 || 7, 11, 0), rsvp:{ u2:"going" } },
-      { id:"e3", uid:"me", kind:"Event", title:"Fall Outing · Harpers Ferry", location:"Meet at the church parking lot", description:"Nov 1–3 hike + BBQ. Bring comfy shoes and a water bottle.", startAt: at(26, 8, 0), rsvp:{} },
-      { id:"e0", uid:"me", kind:"Meeting", title:"Back-to-school Night", location:"Fellowship hall", description:"", startAt: at(-9, 19, 0), rsvp:{ u1:"going", u2:"going", me:"going" } } ],
+      { id:"e3", uid:"me", kind:"Event", title:"Fall Outing · Harpers Ferry", location:"Meet at the church parking lot", description:"Nov 1–3 hike + BBQ. Bring comfy shoes and a water bottle.", startAt: at(26, 8, 0), rsvp:{} } ],
     prayers: [
-      { id:"p1", uid:"u1", privacy:"group", status:"active", prayedCount:3, title:"School", request:"Please pray for an important exam this week.", category:"School", testimony:"", createdAt: now - 2*Hr, answeredAt:0 },
-      { id:"p2", uid:"u2", privacy:"group", status:"active", prayedCount:5, title:"My grandma", request:"She is in the hospital. Pray for healing and peace for our family.", category:"Family", testimony:"", createdAt: now - D, answeredAt:0 },
-      { id:"p3", uid:"u3", privacy:"leaders", status:"active", prayedCount:1, title:"Something personal", request:"I'd like my leaders to pray with me about a hard week.", category:"Personal", testimony:"", createdAt: now - 1.5*D, answeredAt:0 },
-      { id:"p4", uid:"u6", privacy:"group", status:"answered", prayedCount:6, title:"Job interview", request:"Interview on Tuesday for a part-time job.", category:"Work", testimony:"I got the job! Thank you all for praying 🙌", createdAt: now - 6*D, answeredAt: now - 2*D } ],
-    prayed: { p2: new Set(["u1"]) } };
-  const comCbs = { ev: null, pr: null };
+      { id:"p1", uid:"u1", anon:false, privacy:"group", status:"active", prayedCount:3, title:"School", request:"Please pray for an important exam this week.", category:"School", testimony:"", createdAt: now - 2*Hr, answeredAt:0 },
+      { id:"p2", uid:null, anon:true, privacy:"group", status:"active", prayedCount:5, title:"My family", request:"Things are hard at home right now. Please pray for peace.", category:"Family", testimony:"", createdAt: now - D, answeredAt:0 },
+      { id:"p3", uid:"u3", anon:false, privacy:"leaders", status:"active", prayedCount:1, title:"Something personal", request:"I'd like my leaders to pray with me about a hard week.", category:"Personal", testimony:"", createdAt: now - 1.5*D, answeredAt:0 },
+      { id:"p4", uid:"u6", anon:false, privacy:"group", status:"answered", prayedCount:6, title:"Job interview", request:"Interview on Tuesday for a part-time job.", category:"Work", testimony:"I got the job! Thank you all for praying 🙌", createdAt: now - 6*D, answeredAt: now - 2*D } ],
+    devotions: [
+      { id:"d1", uid:"u2", anon:false, likeCount:4, ref:"Psalm 23:1", verse:"The Lord is my shepherd; I shall not want.", body:"I worry about a lot of things, but today this reminded me that God already knows what I need.", createdAt: now - 3*Hr },
+      { id:"d2", uid:null, anon:true, likeCount:2, ref:"Matthew 11:28", verse:"Come to me, all you who are weary and burdened, and I will give you rest.", body:"This week has been exhausting. Taking a moment to rest in Him.", createdAt: now - 5*Hr },
+      { id:"d3", uid:"me", anon:false, likeCount:6, ref:"Mark 11:15–17", verse:"", body:"Jesus cared that everyone had a place to pray. Who around me feels left out?", createdAt: now - D - 2*Hr } ],
+    comments: [
+      { id:"c1", did:"d1", uid:"u1", anon:false, text:"Needed this today 🙏", createdAt: now - 2*Hr },
+      { id:"c2", did:"d2", uid:null, anon:true, text:"Praying for you!", createdAt: now - 4*Hr } ],
+    prayed: { p2: new Set(["u1"]) }, liked: { d1: new Set(["u1"]) }, owners: { p2: "u4", d2: "u1", c2: "u3" } };
+  const comCbs = {};
   const comEmit = () => {
-    if (cur !== FG && comCbs.ev) comCbs.ev([]);
-    if (cur !== FG && comCbs.pr) comCbs.pr.fn([]);
-    if (cur !== FG) return;
-    comCbs.ev?.(com.events.map(e => ({ ...e, rsvp: { ...e.rsvp } })));
-    if (comCbs.pr){ const lead = comCbs.pr.lead; comCbs.pr.fn(com.prayers.filter(p => lead || p.privacy === "group" || p.uid === uid()).map(p => ({ ...p }))); }
+    const on = cur === FG, lead = c()?.members[uid()]?.role === "leader";
+    comCbs.mine?.(Object.entries(com.owners).filter(([, u]) => u === uid()).map(([id]) => id));
+    comCbs.ev?.(on ? com.events.map(e => ({ ...e, rsvp: { ...e.rsvp } })) : []);
+    comCbs.pr?.(on ? com.prayers.filter(p => lead || p.privacy === "group" || p.uid === uid() || com.owners[p.id] === uid()).map(p => ({ ...p })) : []);
+    comCbs.dv?.(on ? com.devotions.map(x => ({ ...x })) : []);
+    comCbs.cm?.(on ? com.comments.map(x => ({ ...x })) : []);
   };
+  const watch = k => next => { comCbs[k] = next; setTimeout(comEmit, 0); return () => { comCbs[k] = null; }; };
+  const newPost = (list, data, anon) => { const id = "x" + (++seq); list.push({ id, ...data, uid: anon ? null : uid(), anon: !!anon, createdAt: Date.now() }); if (anon) com.owners[id] = uid(); comEmit(); };
   const community = {
-    watchEvents(next){ comCbs.ev = next; setTimeout(comEmit, 0); return () => { comCbs.ev = null; }; },
-    async saveEvent(id, e){ validateEvent(e); if (myRole() !== "leader") throw Object.assign(new Error("Not allowed"), { code: "permission-denied" });
+    watchMine: watch("mine"), watchEvents: watch("ev"), watchDevotions: watch("dv"), watchComments: watch("cm"),
+    watchPrayers(lead, next){ comCbs.pr = next; setTimeout(comEmit, 0); return () => { comCbs.pr = null; }; },
+    async saveEvent(id, e){ validateEvent(e); if (c()?.members[uid()]?.role !== "leader") throw Object.assign(new Error("Not allowed"), { code: "permission-denied" });
       if (id) Object.assign(com.events.find(x => x.id === id), e); else com.events.push({ id: "e" + (++seq), uid: uid(), rsvp: {}, ...e }); comEmit(); },
     async deleteEvent(id){ com.events = com.events.filter(x => x.id !== id); comEmit(); },
     async setRsvp(id, r){ const e = com.events.find(x => x.id === id); if (r) e.rsvp[uid()] = r; else delete e.rsvp[uid()]; comEmit(); },
-    watchPrayers(lead, next){ comCbs.pr = { lead, fn: next }; setTimeout(comEmit, 0); return () => { comCbs.pr = null; }; },
-    async addPrayer(p){ validatePrayer(p); com.prayers.push({ id: "p" + (++seq), uid: uid(), privacy: p.privacy, status: "active", prayedCount: 0, title: p.title, request: p.request, category: p.category, testimony: "", createdAt: Date.now(), answeredAt: 0 }); comEmit(); },
+    async addPrayer(p){ validatePrayer(p); newPost(com.prayers, { privacy: p.privacy, status: "active", prayedCount: 0, title: p.title, request: p.request, category: p.category, testimony: "", answeredAt: 0 }, p.anon); },
     async prayedByMe(id){ return !!com.prayed[id]?.has(uid()); },
     async pray(id){ const s = com.prayed[id] ||= new Set(); if (s.has(uid())) throw new Error("already"); s.add(uid()); com.prayers.find(x => x.id === id).prayedCount++; comEmit(); },
     async answerPrayer(p, t){ Object.assign(com.prayers.find(x => x.id === p.id), { status: "answered", testimony: t, answeredAt: p.answeredAt || Date.now() }); comEmit(); },
-    async deletePrayer(id){ com.prayers = com.prayers.filter(x => x.id !== id); comEmit(); }
+    async deletePrayer(id){ com.prayers = com.prayers.filter(x => x.id !== id); comEmit(); },
+    async addDevotion(v){ validateDevotion(v); newPost(com.devotions, { ref: v.ref, verse: v.verse, body: v.body, likeCount: 0 }, v.anon); },
+    async deleteDevotion(id){ com.devotions = com.devotions.filter(x => x.id !== id); comEmit(); },
+    async likedByMe(id){ return !!com.liked[id]?.has(uid()); },
+    async like(id){ const s = com.liked[id] ||= new Set(); if (s.has(uid())) throw new Error("already"); s.add(uid()); com.devotions.find(x => x.id === id).likeCount++; comEmit(); },
+    async unlike(id){ const s = com.liked[id]; if (!s?.has(uid())) throw new Error("not liked"); s.delete(uid()); com.devotions.find(x => x.id === id).likeCount--; comEmit(); },
+    async addComment(did, text, anon){ validateComment(text); newPost(com.comments, { did, text }, anon); },
+    async deleteComment(id){ com.comments = com.comments.filter(x => x.id !== id); comEmit(); }
   };
   return {
     community,
@@ -1366,23 +1445,25 @@ const handlers = {
   }
 };
 const smallGroupContext = () => ({ churchId: S.cid, user: S.user, membership: S.me, members: S.members, groupName: theme()?.name || "" });
-const smallGroups = createCommunityUI({ root: $("#vGroups"), getContext: smallGroupContext, getApi: () => api.community, sheet, toast, confirm: askConfirm,
-  changed: () => { if (S.tab === "ann" && !S.room && S.cid) renderAnn(); badges(); }
+const smallGroups = createCommunityUI({ root: $("#vGroups"), newsRoot: $("#vAnn"), getContext: smallGroupContext, getApi: () => api.community, sheet, toast, confirm: askConfirm,
+  changed: why => {
+    if (why === "tab:prayer") store.set(prayerSeenKey(), Date.now());
+    if (why === "tab:devotion") store.set(devSeenKey(), Date.now());
+    if (S.tab === "ann" && !S.room && S.cid) renderAnn();
+    badges();
+  }
 });
-const prayerSeenKey = () => `seenPrayer:${S.cid}`;
+const prayerSeenKey = () => `seenPrayer:${S.cid}`, devSeenKey = () => `seenDevotion:${S.cid}`;
+// a small card on News pointing to the Small Group tab: counts only, never prayer or devotion content
 function smallGroupHomeCard(){
-  const e = smallGroups.nextEvent(), mine = smallGroups.myRsvp(e);
-  const n = smallGroups.newPrayerCount(store.get(prayerSeenKey(), Date.now() - 7 * 864e5));   // a count only: prayer content never appears here
-  const when = e ? new Date(e.startAt).toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "";
+  const week = Date.now() - 7 * 864e5;
+  const nd = smallGroups.newDevotionCount(store.get(devSeenKey(), week)), np = smallGroups.newPrayerCount(store.get(prayerSeenKey(), week));
   return `<button class="sg-card sg-home-card" data-act="smallGroups"><span>Small Group</span>
-    <strong>${e ? esc(e.title) : "Events, prayer and people"}</strong>
-    <span>${e ? `📅 ${esc(when)}${e.location ? " · " + esc(e.location) : ""}` : "See what's coming up and pray for each other"}</span>
-    ${e ? `<span>${mine ? `Your answer: <b>${esc({ going: "Going", maybe: "Maybe", no: "Can't go" }[mine])}</b>` : "<b>Will you come? Tap to answer</b>"}</span>` : ""}
-    ${n ? `<span>🙏 ${n} new prayer request${n > 1 ? "s" : ""} · Someone in your group shared a prayer request.</span>` : ""}
+    <strong>Today's devotion & prayer</strong>
+    <span>${nd || np ? [nd ? `📖 ${nd} new devotion${nd > 1 ? "s" : ""}` : "", np ? `🙏 ${np} new prayer request${np > 1 ? "s" : ""}` : ""].filter(Boolean).join(" · ") : "Share what God showed you today and pray for each other"}</span>
     <span>Open Small Group →</span></button>`;
 }
 document.addEventListener("click", e => { if (e.target.closest('[data-act="smallGroups"]')) setTab("groups"); });
-document.addEventListener("click", e => { if (e.target.closest('#vGroups [data-sg="tab"][data-k="prayer"]')){ store.set(prayerSeenKey(), Date.now()); badges(); } });
 function refreshChats(){ if (S.room) renderRoomHeader(); else if (S.tab === "chats") renderChats(); badges(); }
 function rerenderTab(){ ({ ann: renderAnn, chats: renderChats, groups: () => smallGroups.sync(), manage: renderManage, me: renderMe })[S.tab]?.(); }
 
@@ -1516,8 +1597,10 @@ function renderAnn(){
   const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone;
   $("#vAnn").innerHTML =
     (!standalone && !DEMO && !store.get("hideTip", false) ? `<div class="install-tip"><span>📲</span><div><b>Install the app</b> so it opens full screen from your Home Screen.<br>${installEvt ? `<button class="link-btn" data-act="installNow" style="padding:4px 0;color:var(--accent);font-weight:700">Install now</button> · ` : `<a class="link-btn" href="download.html" style="padding:4px 0;color:var(--accent);font-weight:700">Show me how</a> · `}<button class="link-btn" data-act="hideTip" style="padding:4px 0">Not now</button></div></div>` : "") +
+    (isLeader() ? `<div class="compose-row"><button class="compose-btn" data-act="newAnn">＋ New announcement</button><button class="compose-btn" data-ev="new">＋ New event</button></div>` : "") +
+    smallGroups.eventsHTML() +
     smallGroupHomeCard() +
-    (isLeader() ? `<button class="compose-btn" data-act="newAnn">＋ New announcement</button>` : "") +
+    (list.length ? `<div class="sec-title">Announcements</div>` : "") +
     (list.length ? list.map(a => `
       <article class="ann ${a.pinned ? "pinned" : ""} ${a.at > annSeenAtRender && a.uid !== S.user?.uid ? "new" : ""}">
         ${a.locked ? `<div class="locked">🔒 Waiting for access. A leader's app shares the key the next time it opens.</div>` : `<h3>${a.pinned ? "📌 " : ""}${esc(a.title)}</h3>${a.body ? `<div class="body">${esc(a.body)}</div>` : ""}`}
