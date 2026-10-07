@@ -1,139 +1,127 @@
+// Security-rule tests for the Small Group space (events + RSVP + prayer). Emulator only (demo-gather).
 import { before, after, test } from 'node:test';
 import { readFile } from 'node:fs/promises';
 import { initializeTestEnvironment, assertSucceeds, assertFails } from '@firebase/rules-unit-testing';
-import { doc, collection, getDoc, getDocs, query, where, setDoc, updateDoc, deleteDoc, addDoc, writeBatch, serverTimestamp, Timestamp, increment } from 'firebase/firestore';
+import { doc, collection, getDoc, getDocs, query, where, setDoc, updateDoc, deleteDoc, writeBatch, serverTimestamp, Timestamp, increment, deleteField } from 'firebase/firestore';
+
 let env;
-const cid = 'church';
-const path = id => `churches/${cid}/smallGroups/${id}`;
-const data = (leaderId, memberIds) => ({ name: 'Faith Group', description: 'Grow together', leaderId, memberIds, meetingDay: 'Friday', meetingTime: '19:30', meetingLocation: 'Room 2', imageUrl: '', status: 'active', createdAt: Timestamp.now(), updatedAt: Timestamp.now() });
-const db = (uid, claims) => env.authenticatedContext(uid, claims).firestore();
-const claims = role => ({ smallGroupRoles: { [cid]: role } });
+const cid = 'church', other = 'otherChurch';
+const db = uid => env.authenticatedContext(uid).firestore();
+const anon = () => env.unauthenticatedContext().firestore();
+const ev = id => `churches/${cid}/events/${id}`;
+const pr = id => `churches/${cid}/prayers/${id}`;
+const box = { iv: 'aXY=', ct: 'ZW5jcnlwdGVk' };   // stands in for end-to-end encrypted content
+const newEvent = (uid, patch = {}) => ({ uid, startAt: Timestamp.fromMillis(Date.now() + 864e5), ...box, rsvp: {}, createdAt: serverTimestamp(), updatedAt: serverTimestamp(), ...patch });
+const newPrayer = (uid, privacy = 'group', patch = {}) => ({ uid, privacy, status: 'active', prayedCount: 0, ...box, createdAt: serverTimestamp(), answeredAt: null, ...patch });
+const pray = async (uid, id) => { const f = db(uid), b = writeBatch(f); b.set(doc(f, pr(id) + '/responses/' + uid), { createdAt: serverTimestamp() }); b.update(doc(f, pr(id)), { prayedCount: increment(1) }); return b.commit(); };
+
 before(async () => {
   env = await initializeTestEnvironment({ projectId: 'demo-gather', firestore: { host: '127.0.0.1', port: 8080, rules: await readFile(new URL('../firebase/firestore.rules', import.meta.url), 'utf8') } });
   await env.clearFirestore();
   await env.withSecurityRulesDisabled(async ctx => {
     const f = ctx.firestore();
-    await setDoc(doc(f, `churches/${cid}`), { name: 'Church', createdBy: 'owner' });
-    for (const uid of ['owner', 'leader', 'member', 'member2', 'otherLeader', 'admin', 'pastor', 'pending', 'removed']) await setDoc(doc(f, `churches/${cid}/members/${uid}`), { name: uid, role: ['owner', 'leader', 'otherLeader'].includes(uid) ? 'leader' : ['pending', 'removed'].includes(uid) ? uid : 'member' });
-    await setDoc(doc(f, path('faith')), data('leader', ['leader', 'member', 'member2']));
-    await setDoc(doc(f, path('other')), data('otherLeader', ['otherLeader']));
-    await setDoc(doc(f, path('faith') + '/members/member'), { firstName: 'Member', photo: '', bio: '' });
-    const prayer = (uid, privacy) => ({ uid, title: 'School', request: 'Please pray for an important exam this week.', category: 'School', privacy, status: 'active', testimony: '', prayedCount: 0, createdAt: Timestamp.now(), answeredAt: null });
-    await setDoc(doc(f, path('faith') + '/prayers/private'), prayer('member', 'leaders'));
-    await setDoc(doc(f, path('faith') + '/prayers/open'), prayer('member', 'group'));
-    await setDoc(doc(f, path('other') + '/prayers/otherOpen'), prayer('otherLeader', 'group'));
+    await setDoc(doc(f, `churches/${cid}`), { name: 'FGYG', createdBy: 'leader' });
+    await setDoc(doc(f, `churches/${other}`), { name: 'Other', createdBy: 'otherLeader' });
+    const roles = { leader: 'leader', leader2: 'leader', member: 'member', member2: 'member', pending: 'pending', removed: 'removed' };
+    for (const [uid, role] of Object.entries(roles)) await setDoc(doc(f, `churches/${cid}/members/${uid}`), { name: uid, role });
+    await setDoc(doc(f, `churches/${other}/members/otherLeader`), { name: 'otherLeader', role: 'leader' });
+    await setDoc(doc(f, ev('e1')), { uid: 'leader', startAt: Timestamp.fromMillis(Date.now() + 864e5), ...box, rsvp: { member2: 'maybe' }, createdAt: Timestamp.now(), updatedAt: Timestamp.now() });
+    const seed = (uid, privacy) => ({ uid, privacy, status: 'active', prayedCount: 0, ...box, createdAt: Timestamp.now(), answeredAt: null });
+    await setDoc(doc(f, pr('open')), seed('member', 'group'));
+    await setDoc(doc(f, pr('private')), seed('member', 'leaders'));
+    await setDoc(doc(f, `churches/${other}/prayers/x`), seed('otherLeader', 'group'));
   });
 });
 after(async () => { await env?.cleanup(); });
-test('members may read and query their groups but cannot browse unrelated groups or directories', async () => {
-  const f = db('member');
-  await assertSucceeds(getDoc(doc(f, path('faith'))));
-  await assertSucceeds(getDocs(query(collection(f, `churches/${cid}/smallGroups`), where('memberIds', 'array-contains', 'member'))));
-  await assertSucceeds(getDocs(collection(f, path('faith') + '/members')));
-  await assertFails(getDoc(doc(f, path('other'))));
-  await assertFails(getDocs(collection(f, `churches/${cid}/smallGroups`)));
-  await assertFails(getDocs(collection(db('otherLeader'), path('faith') + '/members')));
+
+test('only approved members of this group can see its events', async () => {
+  await assertSucceeds(getDoc(doc(db('member'), ev('e1'))));
+  await assertSucceeds(getDocs(collection(db('member'), `churches/${cid}/events`)));
+  for (const uid of ['pending', 'removed', 'otherLeader', 'stranger']) await assertFails(getDoc(doc(db(uid), ev('e1'))));
+  await assertFails(getDoc(doc(anon(), ev('e1'))));
+  await assertFails(getDocs(collection(db('member'), `churches/${other}/events`)));
 });
-test('anonymous, pending, removed and outside-church users cannot read groups', async () => {
-  await assertFails(getDoc(doc(env.unauthenticatedContext().firestore(), path('faith'))));
-  for (const uid of ['pending', 'removed', 'outsider']) await assertFails(getDoc(doc(db(uid, claims('ADMIN')), path('faith'))));
+test('leaders post, edit and delete events; members cannot', async () => {
+  await assertSucceeds(setDoc(doc(db('leader'), ev('e2')), newEvent('leader')));
+  await assertFails(setDoc(doc(db('member'), ev('e3')), newEvent('member')));
+  await assertFails(setDoc(doc(db('leader'), ev('e4')), newEvent('leader2')));                          // posting as someone else
+  await assertFails(setDoc(doc(db('leader'), ev('e5')), newEvent('leader', { rsvp: { member: 'going' } }))); // pre-filled answers
+  await assertFails(setDoc(doc(db('leader'), ev('e6')), newEvent('leader', { title: 'plain text' })));     // unexpected plaintext field
+  await assertFails(setDoc(doc(db('otherLeader'), ev('e7')), newEvent('otherLeader')));                   // leader of another group
+  await assertSucceeds(updateDoc(doc(db('leader2'), ev('e2')), { ...box, startAt: Timestamp.fromMillis(Date.now() + 2 * 864e5), updatedAt: serverTimestamp() }));
+  await assertFails(updateDoc(doc(db('member'), ev('e2')), { ...box, updatedAt: serverTimestamp() }));
+  await assertFails(deleteDoc(doc(db('member'), ev('e2'))));
+  await assertSucceeds(deleteDoc(doc(db('leader'), ev('e2'))));
 });
-test('own leader may edit details but cannot change memberships or administer other groups', async () => {
-  const f = db('leader');
-  await assertSucceeds(updateDoc(doc(f, path('faith')), { meetingLocation: 'Room 3', updatedAt: serverTimestamp() }));
-  await assertFails(updateDoc(doc(f, path('faith')), { memberIds: ['leader'], updatedAt: serverTimestamp() }));
-  await assertFails(updateDoc(doc(f, path('other')), { name: 'Changed', updatedAt: serverTimestamp() }));
-  await assertFails(updateDoc(doc(db('member'), path('faith')), { name: 'Changed', updatedAt: serverTimestamp() }));
+test('RSVP: everyone answers only for themselves, with Going / Maybe / Can\'t go', async () => {
+  await assertSucceeds(updateDoc(doc(db('member'), ev('e1')), { 'rsvp.member': 'going' }));
+  await assertSucceeds(updateDoc(doc(db('member'), ev('e1')), { 'rsvp.member': 'no' }));
+  await assertSucceeds(updateDoc(doc(db('member'), ev('e1')), { 'rsvp.member': deleteField() }));
+  await assertSucceeds(updateDoc(doc(db('leader'), ev('e1')), { 'rsvp.leader': 'maybe' }));
+  await assertFails(updateDoc(doc(db('member'), ev('e1')), { 'rsvp.member2': 'no' }));                     // someone else's answer
+  await assertFails(updateDoc(doc(db('member'), ev('e1')), { 'rsvp.member2': deleteField() }));
+  await assertFails(updateDoc(doc(db('member'), ev('e1')), { 'rsvp.member': 'definitely' }));
+  await assertFails(updateDoc(doc(db('member'), ev('e1')), { 'rsvp.member': 'going', 'rsvp.member2': 'going' }));
+  await assertFails(updateDoc(doc(db('pending'), ev('e1')), { 'rsvp.pending': 'going' }));
+  await assertFails(updateDoc(doc(db('otherLeader'), ev('e1')), { 'rsvp.otherLeader': 'going' }));
+  const snap = await getDoc(doc(db('member2'), ev('e1')));
+  if (snap.data().rsvp.member2 !== 'maybe' || snap.data().rsvp.leader !== 'maybe') throw new Error('unexpected rsvp ' + JSON.stringify(snap.data().rsvp));
 });
-test('admin manages all groups; pastor reads all but cannot administer; wrong-church claims do not elevate', async () => {
-  await assertSucceeds(getDocs(collection(db('admin', claims('ADMIN')), `churches/${cid}/smallGroups`)));
-  await assertSucceeds(updateDoc(doc(db('admin', claims('ADMIN')), path('other')), { status: 'archived', updatedAt: serverTimestamp() }));
-  await assertSucceeds(getDocs(collection(db('pastor', claims('PASTOR')), `churches/${cid}/smallGroups`)));
-  await assertFails(updateDoc(doc(db('pastor', claims('PASTOR')), path('other')), { name: 'Changed', updatedAt: serverTimestamp() }));
-  await assertFails(getDoc(doc(db('member', { smallGroupRoles: { elsewhere: 'ADMIN' } }), path('other'))));
-  await assertFails(getDoc(doc(db('member', { role: 'ADMIN' }), path('other'))));
-});
-test('church owner creates groups; membership/directory batch is atomic and minimizes data', async () => {
-  const f = db('owner'), b = writeBatch(f);
-  b.set(doc(f, path('created')), { ...data('leader', ['leader', 'member']), createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
-  for (const uid of ['leader', 'member']) b.set(doc(f, path('created') + `/members/${uid}`), { firstName: uid, photo: '', bio: '' });
-  await assertSucceeds(b.commit());
-  await assertFails(setDoc(doc(f, path('created') + '/members/member'), { firstName: 'Member', photo: '', bio: '', email: 'private@example.com' }));
-  await assertFails(setDoc(doc(db('member'), path('created') + '/members/member'), { firstName: 'Forged', photo: '', bio: '' }));
-});
-test('membership removal immediately revokes document and directory access', async () => {
-  const f = db('owner'), b = writeBatch(f);
-  b.update(doc(f, path('created')), { memberIds: ['leader'], updatedAt: serverTimestamp() });
-  b.delete(doc(f, path('created') + '/members/member'));
-  await assertSucceeds(b.commit());
-  await assertFails(getDoc(doc(db('member'), path('created'))));
-  await assertFails(getDocs(collection(db('member'), path('created') + '/members')));
-});
-const pr = id => path('faith') + '/prayers/' + id;
-const newPrayer = (uid, privacy = 'group', patch = {}) => ({ uid, title: 'Family', request: 'Please pray for my grandmother.', category: 'Family', privacy, status: 'active', testimony: '', prayedCount: 0, createdAt: serverTimestamp(), answeredAt: null, ...patch });
-test('"Leaders Only" prayers are returned only to the author and the group leader', async () => {
+test('"Leaders Only" prayers are returned only to the author and the group\'s leaders', async () => {
   await assertSucceeds(getDoc(doc(db('member'), pr('private'))));
   await assertSucceeds(getDoc(doc(db('leader'), pr('private'))));
-  for (const [uid, c] of [['member2'], ['pastor', claims('PASTOR')], ['admin', claims('ADMIN')], ['owner'], ['otherLeader'], ['outsider']]) await assertFails(getDoc(doc(db(uid, c), pr('private'))));
-  // a plain list would include the leaders-only request, so it is refused; the group-only query is allowed
-  await assertFails(getDocs(collection(db('member2'), path('faith') + '/prayers')));
-  const open = await assertSucceeds(getDocs(query(collection(db('member2'), path('faith') + '/prayers'), where('privacy', '==', 'group'))));
+  await assertSucceeds(getDoc(doc(db('leader2'), pr('private'))));
+  for (const uid of ['member2', 'pending', 'removed', 'otherLeader', 'stranger']) await assertFails(getDoc(doc(db(uid), pr('private'))));
+  await assertFails(getDocs(collection(db('member2'), `churches/${cid}/prayers`)));                         // a plain list would include it
+  const open = await assertSucceeds(getDocs(query(collection(db('member2'), `churches/${cid}/prayers`), where('privacy', '==', 'group'))));
   if (open.docs.some(d => d.data().privacy !== 'group')) throw new Error('leaders-only prayer leaked');
-  await assertSucceeds(getDocs(query(collection(db('member2'), path('faith') + '/prayers'), where('uid', '==', 'member2'))));
-  await assertSucceeds(getDocs(collection(db('leader'), path('faith') + '/prayers')));
+  await assertSucceeds(getDocs(query(collection(db('member2'), `churches/${cid}/prayers`), where('uid', '==', 'member2'))));
+  await assertSucceeds(getDocs(collection(db('leader'), `churches/${cid}/prayers`)));
 });
-test('group prayers: members of the group and pastors can read; other groups and outsiders cannot', async () => {
+test('group prayers: visible to this group only', async () => {
   await assertSucceeds(getDoc(doc(db('member2'), pr('open'))));
-  await assertSucceeds(getDoc(doc(db('pastor', claims('PASTOR')), pr('open'))));
-  await assertSucceeds(getDocs(query(collection(db('pastor', claims('PASTOR')), path('faith') + '/prayers'), where('privacy', '==', 'group'))));
-  await assertFails(getDoc(doc(db('member'), path('other') + '/prayers/otherOpen')));
-  await assertFails(getDoc(doc(db('otherLeader'), pr('open'))));
-  await assertFails(getDoc(doc(env.unauthenticatedContext().firestore(), pr('open'))));
-  await assertFails(getDoc(doc(db('removed'), pr('open'))));
+  await assertFails(getDoc(doc(db('member'), `churches/${other}/prayers/x`)));
+  for (const uid of ['pending', 'removed', 'otherLeader']) await assertFails(getDoc(doc(db(uid), pr('open'))));
+  await assertFails(getDoc(doc(anon(), pr('open'))));
 });
-test('prayer request creation works for group members only, with valid fields', async () => {
+test('prayer request creation works for members, with valid fields only', async () => {
   await assertSucceeds(setDoc(doc(db('member2'), pr('p1')), newPrayer('member2')));
   await assertSucceeds(setDoc(doc(db('member2'), pr('p2')), newPrayer('member2', 'leaders')));
-  await assertFails(setDoc(doc(db('member2'), pr('p3')), newPrayer('member')));                      // pretending to be someone else
-  await assertFails(setDoc(doc(db('otherLeader'), pr('p4')), newPrayer('otherLeader')));             // not in this group
-  await assertFails(setDoc(doc(db('member2'), pr('p5')), newPrayer('member2', 'public')));
-  await assertFails(setDoc(doc(db('member2'), pr('p6')), newPrayer('member2', 'group', { prayedCount: 50 })));
-  await assertFails(setDoc(doc(db('member2'), pr('p7')), newPrayer('member2', 'group', { status: 'answered' })));
-  await assertFails(setDoc(doc(db('member2'), pr('p8')), newPrayer('member2', 'group', { category: 'Gossip' })));
-  await assertFails(setDoc(doc(db('pastor', claims('PASTOR')), pr('p9')), newPrayer('pastor')));      // staff outside the group can't post
+  await assertFails(setDoc(doc(db('member2'), pr('p3')), newPrayer('member')));
+  await assertFails(setDoc(doc(db('member2'), pr('p4')), newPrayer('member2', 'public')));
+  await assertFails(setDoc(doc(db('member2'), pr('p5')), newPrayer('member2', 'group', { prayedCount: 50 })));
+  await assertFails(setDoc(doc(db('member2'), pr('p6')), newPrayer('member2', 'group', { status: 'answered' })));
+  await assertFails(setDoc(doc(db('member2'), pr('p7')), newPrayer('member2', 'group', { request: 'plain text' })));
+  await assertFails(setDoc(doc(db('pending'), pr('p8')), newPrayer('pending')));
+  await assertFails(setDoc(doc(db('otherLeader'), pr('p9')), newPrayer('otherLeader')));
 });
 test('"I Prayed" counts once per person and cannot be forged', async () => {
-  const pray = async uid => { const f = db(uid), b = writeBatch(f); b.set(doc(f, pr('open') + '/responses/' + uid), { createdAt: serverTimestamp() }); b.update(doc(f, pr('open')), { prayedCount: increment(1) }); return b.commit(); };
-  await assertSucceeds(pray('member2'));
-  await assertFails(pray('member2'));                                                                // duplicate
-  await assertSucceeds(pray('leader'));
-  await assertFails(updateDoc(doc(db('member'), pr('open')), { prayedCount: increment(1) }));        // count without a response
-  await assertFails(setDoc(doc(db('member'), pr('open') + '/responses/member'), { createdAt: serverTimestamp() })); // response without count
+  await assertSucceeds(pray('member2', 'open'));
+  await assertFails(pray('member2', 'open'));                                                               // duplicate
+  await assertSucceeds(pray('leader', 'open'));
+  await assertFails(updateDoc(doc(db('member'), pr('open')), { prayedCount: increment(1) }));               // count without a record
+  await assertFails(setDoc(doc(db('member'), pr('open') + '/responses/member'), { createdAt: serverTimestamp() }));
   { const f = db('member'), b = writeBatch(f); b.set(doc(f, pr('open') + '/responses/member'), { createdAt: serverTimestamp() }); b.update(doc(f, pr('open')), { prayedCount: increment(5) }); await assertFails(b.commit()); }
-  { const f = db('member'), b = writeBatch(f); b.set(doc(f, pr('open') + '/responses/member2'), { createdAt: serverTimestamp() }); b.update(doc(f, pr('open')), { prayedCount: increment(1) }); await assertFails(b.commit()); } // as someone else
+  { const f = db('member'), b = writeBatch(f); b.set(doc(f, pr('open') + '/responses/member2'), { createdAt: serverTimestamp() }); b.update(doc(f, pr('open')), { prayedCount: increment(1) }); await assertFails(b.commit()); }
   await assertFails(deleteDoc(doc(db('member2'), pr('open') + '/responses/member2')));
-  await assertFails(getDoc(doc(db('member'), pr('open') + '/responses/member2')));                    // who prayed stays private
+  await assertFails(getDoc(doc(db('member'), pr('open') + '/responses/member2')));                           // who prayed stays private
+  await assertFails(pray('member2', 'private'));                                                            // can't pray on what you can't see
   const snap = await getDoc(doc(db('member'), pr('open')));
   if (snap.data().prayedCount !== 2) throw new Error('expected 2, got ' + snap.data().prayedCount);
-  // nobody outside can pray on a leaders-only request they cannot see
-  { const f = db('member2'), b = writeBatch(f); b.set(doc(f, pr('private') + '/responses/member2'), { createdAt: serverTimestamp() }); b.update(doc(f, pr('private')), { prayedCount: increment(1) }); await assertFails(b.commit()); }
 });
-test('only the author or the group leader can mark a prayer answered and add a testimony', async () => {
-  await assertFails(updateDoc(doc(db('member2'), pr('open')), { status: 'answered', answeredAt: serverTimestamp(), testimony: '' }));
-  await assertFails(updateDoc(doc(db('pastor', claims('PASTOR')), pr('open')), { status: 'answered', answeredAt: serverTimestamp(), testimony: '' }));
-  await assertSucceeds(updateDoc(doc(db('member'), pr('open')), { status: 'answered', answeredAt: serverTimestamp(), testimony: 'Passed the exam!' }));
-  await assertSucceeds(updateDoc(doc(db('member'), pr('open')), { testimony: 'Passed the exam — thank you all!' }));
-  await assertFails(updateDoc(doc(db('member'), pr('open')), { testimony: 'x'.repeat(501) }));
-  await assertSucceeds(updateDoc(doc(db('leader'), pr('private')), { status: 'answered', answeredAt: serverTimestamp(), testimony: '' }));
-  await assertFails(updateDoc(doc(db('member2'), pr('p1')), { request: 'edited by someone else' }));
+test('only the author or a leader can mark a prayer answered or change it', async () => {
+  await assertFails(updateDoc(doc(db('member2'), pr('open')), { status: 'answered', answeredAt: serverTimestamp(), ...box }));
+  await assertSucceeds(updateDoc(doc(db('member'), pr('open')), { status: 'answered', answeredAt: serverTimestamp(), iv: 'bmV3', ct: 'dGVzdGltb255' }));
+  await assertSucceeds(updateDoc(doc(db('member'), pr('open')), { iv: 'bmV3Mg==', ct: 'dGVzdGltb255Mg==' }));
+  await assertFails(updateDoc(doc(db('member'), pr('open')), { status: 'active' }));
+  await assertSucceeds(updateDoc(doc(db('leader'), pr('private')), { status: 'answered', answeredAt: serverTimestamp(), ...box }));
+  await assertFails(updateDoc(doc(db('member2'), pr('p1')), { privacy: 'leaders' }));
   await assertFails(deleteDoc(doc(db('member2'), pr('open'))));
   await assertSucceeds(deleteDoc(doc(db('member2'), pr('p1'))));
+  await assertSucceeds(deleteDoc(doc(db('leader'), pr('p2'))));                                              // leaders can remove posts
 });
-test('check-in and other private care data still has no client access', async () => {
-  for (const uid of ['member', 'leader', 'owner']) await assertFails(getDoc(doc(db(uid), path('faith') + '/checkins/x')));
-});
-test('invalid leaders, unsafe image schemes and spoofed timestamps are rejected', async () => {
-  const f = db('owner');
-  const base = { ...data('leader', ['leader']), createdAt: serverTimestamp(), updatedAt: serverTimestamp() };
-  for (const patch of [{ leaderId: 'outsider', memberIds: ['outsider'] }, { imageUrl: 'javascript:alert(1)' }, { updatedAt: Timestamp.fromMillis(0) }, { memberIds: ['leader', 'leader'] }]) await assertFails(setDoc(doc(f, path('invalid')), { ...base, ...patch }));
+test('a leader deleting the whole group can clear prayer records; members cannot', async () => {
+  await assertFails(getDocs(collection(db('member'), pr('open') + '/responses')));
+  await assertSucceeds(getDocs(collection(db('leader'), pr('open') + '/responses')));
+  await assertSucceeds(deleteDoc(doc(db('leader'), pr('open') + '/responses/member2')));
 });

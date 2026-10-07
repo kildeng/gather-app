@@ -34,10 +34,10 @@ async function get(path, token){
   if (!r.ok) throw Object.assign(new Error(`read ${path}: ${r.status}`), { status: r.status });
   return obj((await r.json()).fields);
 }
-async function approvedMembers(cid, token){
+async function approvedMembers(cid, token, roles = ["member", "leader"]){
   const r = await fetch(`${FS}/churches/${cid}:runQuery`, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
     body: JSON.stringify({ structuredQuery: { from: [{ collectionId: "members" }], select: { fields: [{ fieldPath: "role" }] },
-      where: { fieldFilter: { field: { fieldPath: "role" }, op: "IN", value: { arrayValue: { values: [{ stringValue: "member" }, { stringValue: "leader" }] } } } } } }) });
+      where: { fieldFilter: { field: { fieldPath: "role" }, op: "IN", value: { arrayValue: { values: roles.map(r => ({ stringValue: r })) } } } } } }) });
   if (!r.ok) throw new Error("members: " + r.status);
   return (await r.json()).filter(x => x.document).map(x => x.document.name.split("/").pop());
 }
@@ -49,7 +49,7 @@ export default async req => {
     if (req.method !== "POST") return json({ error: "method" }, 405);
     const { token, cid, rid = "", kind } = await req.json().catch(() => ({}));
     const uid = token && uidOf(token);
-    if (!uid || !ID.test(cid || "") || (rid && !ID.test(rid)) || !["msg", "ann", "test"].includes(kind)) return json({ error: "bad request" }, 400);
+    if (!uid || !ID.test(cid || "") || (rid && !ID.test(rid)) || !["msg", "ann", "test", "event", "prayer"].includes(kind)) return json({ error: "bad request" }, 400);
 
     // these reads only succeed if the token is real and the sender is an approved member (security rules)
     const [church, me] = await Promise.all([get(`churches/${cid}`, token), get(`churches/${cid}/members/${uid}`, token)]);
@@ -61,6 +61,17 @@ export default async req => {
     else if (kind === "ann"){
       if (me.role !== "leader") return json({ error: "leaders only" }, 403);
       to = await approvedMembers(cid, token); body = `📣 New announcement from ${who}`; room = "";
+    } else if (kind === "event"){
+      // the event must exist, be the sender's, and be brand new (stops replaying old events as pings)
+      const e = rid && await get(`churches/${cid}/events/${rid}`, token);
+      if (!e || e.uid !== uid || me.role !== "leader" || Date.now() - (e.createdAt || 0) > 120000) return json({ sent: 0, skipped: "not a new event" });
+      to = await approvedMembers(cid, token); body = `📅 ${who} posted a new event`; room = ""; tag = "events";
+    } else if (kind === "prayer"){
+      const p = rid && await get(`churches/${cid}/prayers/${rid}`, token);
+      if (!p || p.uid !== uid || Date.now() - (p.createdAt || 0) > 120000) return json({ sent: 0, skipped: "not a new prayer" });
+      // "Leaders Only" requests ping only the leaders
+      to = p.privacy === "leaders" ? await approvedMembers(cid, token, ["leader"]) : await approvedMembers(cid, token);
+      body = p.privacy === "leaders" ? `🙏 ${who} shared a prayer request with leaders` : `🙏 ${who} shared a prayer request`; room = ""; tag = "prayer";
     } else {
       const r = await get(`churches/${cid}/rooms/${rid}`, token);           // fails unless the sender is in this chat
       if (!r) return json({ error: "no room" }, 404);

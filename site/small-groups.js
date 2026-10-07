@@ -1,378 +1,230 @@
-// Small groups live inside a church. Existing encrypted chats remain independent.
-export const ROLES = Object.freeze({ ADMIN: 'ADMIN', PASTOR: 'PASTOR', LEADER: 'LEADER', MEMBER: 'MEMBER' });
-export function churchRole(context, claims = {}) {
-  if (!context.user || !['member', 'leader'].includes(context.membership?.role)) return null;
-  if (context.church?.createdBy === context.user.uid && context.membership.role === 'leader') return ROLES.ADMIN;
-  const role = claims.smallGroupRoles?.[context.churchId];
-  return ['ADMIN', 'PASTOR'].includes(role) ? role : ROLES.MEMBER;
-}
-export function groupRole(role, group, uid) {
-  if (['ADMIN', 'PASTOR'].includes(role)) return role;
-  if (!role || !group?.memberIds.includes(uid)) return null;
-  return group.leaderId === uid ? ROLES.LEADER : ROLES.MEMBER;
-}
-export function validateGroup(data) {
-  const limits = { name: 60, description: 500, meetingDay: 12, meetingTime: 5, meetingLocation: 160, imageUrl: 2048 };
-  for (const [key, max] of Object.entries(limits)) {
-    if (typeof data[key] !== 'string' || data[key].length > max) throw new Error(`Please check ${key}.`);
-  }
-  if (!data.name.trim()) throw new Error('Please enter a group name.');
-  if (!['', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].includes(data.meetingDay)) throw new Error('Choose a meeting day.');
-  if (data.meetingTime && !/^([01]\d|2[0-3]):[0-5]\d$/.test(data.meetingTime)) throw new Error('Choose a valid meeting time.');
-  if (data.imageUrl && !/^https:\/\//i.test(data.imageUrl)) throw new Error('Use an HTTPS image URL.');
-  if (!['active', 'archived'].includes(data.status) || !Array.isArray(data.memberIds) || data.memberIds.length > 100 || data.memberIds.some(id => typeof id !== 'string' || !id || id.length > 128) || new Set(data.memberIds).size !== data.memberIds.length || !data.memberIds.includes(data.leaderId)) throw new Error('Select a leader and up to 100 distinct members.');
-  return data;
-}
+// Small Group: one shared space for everyone in this group (church / youth group).
+// Leaders post meetings, worship and events; everyone answers Going / Maybe / Can't go,
+// shares prayer requests and sees who's in the group. Titles, details and prayers are
+// end-to-end encrypted with the group key (like announcements); the data layer handles that.
+
+export const EVENT_KINDS = Object.freeze(['Meeting', 'Worship', 'Event']);
 export const PRAYER_CATEGORIES = Object.freeze(['Personal', 'Family', 'Health', 'School', 'Work', 'Faith', 'Other']);
-export function validatePrayer(data) {
-  if (typeof data.title !== 'string' || !data.title.trim() || data.title.length > 80) throw new Error('Please add a short title (up to 80 characters).');
-  if (typeof data.request !== 'string' || !data.request.trim() || data.request.length > 1000) throw new Error('Please write your prayer request (up to 1000 characters).');
-  if (!PRAYER_CATEGORIES.includes(data.category)) throw new Error('Choose a category.');
-  if (!['group', 'leaders'].includes(data.privacy)) throw new Error('Choose who can see this request.');
-  return data;
+export const RSVP = Object.freeze({ going: 'Going', maybe: 'Maybe', no: "Can't go" });
+
+export function validateEvent(e) {
+  if (!EVENT_KINDS.includes(e.kind)) throw new Error('Choose a type.');
+  if (typeof e.title !== 'string' || !e.title.trim() || e.title.length > 80) throw new Error('Please add a title (up to 80 characters).');
+  if (typeof e.location !== 'string' || e.location.length > 160) throw new Error('Location is too long.');
+  if (typeof e.description !== 'string' || e.description.length > 1000) throw new Error('Details are too long (up to 1000 characters).');
+  if (!Number.isFinite(e.startAt)) throw new Error('Choose a date and time.');
+  return e;
 }
-// Prayer access inside one group: being in the group comes first (an admin who leads a group is its LEADER there).
-export function prayerAccess(role, group, uid) {
-  if (!role || !group) return null;
-  if (group.memberIds?.includes(uid)) return group.leaderId === uid ? 'LEADER' : 'MEMBER';
-  return ['ADMIN', 'PASTOR'].includes(role) ? role : null;
+export function validatePrayer(p) {
+  if (typeof p.title !== 'string' || !p.title.trim() || p.title.length > 80) throw new Error('Please add a short title (up to 80 characters).');
+  if (typeof p.request !== 'string' || !p.request.trim() || p.request.length > 1000) throw new Error('Please write your prayer request (up to 1000 characters).');
+  if (!PRAYER_CATEGORIES.includes(p.category)) throw new Error('Choose a category.');
+  if (!['group', 'leaders'].includes(p.privacy)) throw new Error('Choose who can see this request.');
+  return p;
 }
-// Members read prayers with queries the security rules can prove safe: group-wide ones, plus their own.
-export function prayerQueries(access) {
-  if (access === 'LEADER') return [[]];
-  if (access === 'MEMBER') return [[['privacy', '==', 'group']], [['uid', '==', '$me']]];
-  if (['ADMIN', 'PASTOR'].includes(access)) return [[['privacy', '==', 'group']]];
-  return [];
+// Members ask the server only for what the security rules let them see:
+// everyone's group-wide requests plus their own. Leaders can read everything.
+export function prayerQueries(isLeader) {
+  return isLeader ? [[]] : [[['privacy', '==', 'group']], [['uid', '==', '$me']]];
 }
-export function createSmallGroupsApi({ F, A, db, auth }) {
-  const ref = (cid, ...path) => F.doc(db, 'churches', cid, 'smallGroups', ...path);
-  const collection = (cid, ...path) => F.collection(db, 'churches', cid, 'smallGroups', ...path);
-  return {
-    async claims() { return (await A.getIdTokenResult(auth.currentUser)).claims; },
-    watch(cid, role, uid, next, error) {
-      const base = collection(cid);
-      const q = ['ADMIN', 'PASTOR'].includes(role) ? base : F.query(base, F.where('memberIds', 'array-contains', uid));
-      return F.onSnapshot(q, s => next(s.docs.map(d => ({ id: d.id, ...d.data() }))), error);
-    },
-    watchMembers(cid, gid, next, error) {
-      return F.onSnapshot(collection(cid, gid, 'members'), s => next(s.docs.map(d => ({ id: d.id, ...d.data() }))), error);
-    },
-    // Prayer requests (Phase 2)
-    watchPrayers(cid, gid, access, uid, next, error) {
-      const qs = prayerQueries(access), results = qs.map(() => []);
-      const emit = () => { const all = new Map(); results.flat().forEach(p => all.set(p.id, p)); next([...all.values()]); };
-      const stops = qs.map((filters, i) => F.onSnapshot(
-        F.query(collection(cid, gid, 'prayers'), ...filters.map(([f, op, v]) => F.where(f, op, v === '$me' ? uid : v))),
-        s => { results[i] = s.docs.map(d => ({ id: d.id, ...d.data() })); emit(); }, error));
-      if (!qs.length) queueMicrotask(() => next([]));
-      return () => stops.forEach(fn => fn());
-    },
-    async addPrayer(cid, gid, data) {
-      validatePrayer(data);
-      await F.addDoc(collection(cid, gid, 'prayers'), { uid: auth.currentUser.uid, title: data.title.trim(), request: data.request.trim(), category: data.category, privacy: data.privacy, status: 'active', testimony: '', prayedCount: 0, createdAt: F.serverTimestamp(), answeredAt: null });
-    },
-    async prayedByMe(cid, gid, pid) { return (await F.getDoc(ref(cid, gid, 'prayers', pid, 'responses', auth.currentUser.uid))).exists(); },
-    async pray(cid, gid, pid) {
-      const b = F.writeBatch(db);
-      b.set(ref(cid, gid, 'prayers', pid, 'responses', auth.currentUser.uid), { createdAt: F.serverTimestamp() });
-      b.update(ref(cid, gid, 'prayers', pid), { prayedCount: F.increment(1) });
-      await b.commit();
-    },
-    async answerPrayer(cid, gid, pid, testimony, alreadyAnswered) {
-      const t = String(testimony || '').trim().slice(0, 500);
-      await F.updateDoc(ref(cid, gid, 'prayers', pid), alreadyAnswered ? { testimony: t } : { status: 'answered', answeredAt: F.serverTimestamp(), testimony: t });
-    },
-    deletePrayer: (cid, gid, pid) => F.deleteDoc(ref(cid, gid, 'prayers', pid)),
-    async save(cid, id, data, role) {
-      validateGroup(data);
-      const groupRef = id ? ref(cid, id) : F.doc(collection(cid));
-      if (role === 'LEADER') {
-        const { name, description, meetingDay, meetingTime, meetingLocation, imageUrl } = data;
-        await F.updateDoc(groupRef, { name, description, meetingDay, meetingTime, meetingLocation, imageUrl, updatedAt: F.serverTimestamp() });
-      } else {
-        // All reads precede writes. Membership and projected directory change atomically.
-        await F.runTransaction(db, async tx => {
-          const old = await tx.get(groupRef);
-          const profiles = await Promise.all(data.memberIds.map(uid => tx.get(F.doc(db, 'churches', cid, 'members', uid))));
-          if (profiles.some(p => !p.exists() || !['member', 'leader'].includes(p.data().role))) throw new Error('Only approved church members can be assigned.');
-          const existingProfiles = old.exists()
-            ? await Promise.all(data.memberIds.map(uid => tx.get(ref(cid, groupRef.id, 'members', uid)))) : [];
-          const bios = Object.fromEntries(existingProfiles.map(p => [p.id, p.data()?.bio || '']));
-          tx.set(groupRef, { ...data, createdAt: old.exists() ? old.data().createdAt : F.serverTimestamp(), updatedAt: F.serverTimestamp() });
-          for (const p of profiles) {
-            const v = p.data();
-            tx.set(ref(cid, groupRef.id, 'members', p.id), { firstName: v.name.trim().split(/\s+/)[0] || 'Member', photo: (/^https:\/\//i.test(v.photo || '') && v.photo.length <= 2048) ? v.photo : '', bio: bios[p.id] || '' });
-          }
-          for (const uid of old.data()?.memberIds || []) if (!data.memberIds.includes(uid)) tx.delete(ref(cid, groupRef.id, 'members', uid));
-        });
-      }
-      return groupRef.id;
-    }
-  };
+// Who answered what. Only approved members of the group are counted.
+export function rsvpSummary(rsvp = {}, members = {}) {
+  const out = { going: [], maybe: [], no: [] };
+  for (const [uid, r] of Object.entries(rsvp)) if (out[r] && ['member', 'leader'].includes(members[uid]?.role)) out[r].push(uid);
+  return out;
 }
 
-// Optional preview data is memory-only and never sent to Firebase.
-export function createDemoSmallGroupsApi(getContext) {
-  let groups = [{ id: 'faith', name: 'Faith Group', description: 'Know each other. Pray for each other. Grow together.', leaderId: 'me', memberIds: ['me', 'u1', 'u2', 'u3', 'u6'], meetingDay: 'Friday', meetingTime: '19:30', meetingLocation: 'Education Building · Room 2', imageUrl: '', status: 'active' }];
-  const byChurch = new Map();
-  let seededChurch = null;
-  const listFor = cid => {
-    if (!seededChurch) { seededChurch = cid; byChurch.set(cid, groups); }
-    return byChurch.get(cid) || [];
-  };
-  const listeners = new Set();
-  const emit = () => listeners.forEach(fn => fn());
-  const now = Date.now(), day = 864e5, ts = ms => ({ toMillis: () => ms });
-  const prayers = { faith: [
-    { id: 'p1', uid: 'u1', title: 'School', request: 'Please pray for an important exam this week.', category: 'School', privacy: 'group', status: 'active', testimony: '', prayedCount: 3, createdAt: ts(now - 2 * 3600e3), answeredAt: null },
-    { id: 'p2', uid: 'u2', title: 'My grandma', request: 'She is in the hospital. Pray for healing and peace for our family.', category: 'Family', privacy: 'group', status: 'active', testimony: '', prayedCount: 5, createdAt: ts(now - day), answeredAt: null },
-    { id: 'p3', uid: 'u3', title: 'Something personal', request: 'I would like my leader to pray with me about a hard week.', category: 'Personal', privacy: 'leaders', status: 'active', testimony: '', prayedCount: 1, createdAt: ts(now - 1.5 * day), answeredAt: null },
-    { id: 'p4', uid: 'u6', title: 'Job interview', request: 'Interview on Tuesday for a part-time job.', category: 'Work', privacy: 'group', status: 'answered', testimony: 'I got the job! Thank you all for praying 🙌', prayedCount: 6, createdAt: ts(now - 6 * day), answeredAt: ts(now - 2 * day) }
-  ] };
-  const prayed = new Set(['p2']);
-  const prayerListeners = new Set();
-  const emitPrayers = () => prayerListeners.forEach(fn => fn());
-  const canSee = (p, access, uid) => access === 'LEADER' || (access === 'MEMBER' && (p.privacy === 'group' || p.uid === uid)) || (['ADMIN', 'PASTOR'].includes(access) && p.privacy === 'group');
-  return {
-    async claims() { return {}; },
-    watchPrayers(cid, gid, access, uid, next) {
-      const fn = () => next((prayers[gid] || []).filter(p => canSee(p, access, uid)).map(p => ({ ...p })));
-      prayerListeners.add(fn); queueMicrotask(fn); return () => prayerListeners.delete(fn);
-    },
-    async addPrayer(cid, gid, data) { validatePrayer(data); (prayers[gid] ||= []).push({ id: crypto.randomUUID(), uid: getContext().user.uid, title: data.title.trim(), request: data.request.trim(), category: data.category, privacy: data.privacy, status: 'active', testimony: '', prayedCount: 0, createdAt: ts(Date.now()), answeredAt: null }); emitPrayers(); },
-    async prayedByMe(cid, gid, pid) { return prayed.has(pid); },
-    async pray(cid, gid, pid) { if (prayed.has(pid)) throw new Error('Already prayed'); prayed.add(pid); const p = prayers[gid].find(x => x.id === pid); p.prayedCount++; emitPrayers(); },
-    async answerPrayer(cid, gid, pid, testimony) { const p = prayers[gid].find(x => x.id === pid); Object.assign(p, { status: 'answered', answeredAt: p.answeredAt || ts(Date.now()), testimony: String(testimony || '').trim().slice(0, 500) }); emitPrayers(); },
-    async deletePrayer(cid, gid, pid) { prayers[gid] = prayers[gid].filter(x => x.id !== pid); emitPrayers(); },
-    watch(cid, role, uid, next) {
-      const fn = () => next(listFor(cid).filter(g => ['ADMIN', 'PASTOR'].includes(role) || g.memberIds.includes(uid)).map(g => ({ ...g })));
-      listeners.add(fn); queueMicrotask(fn); return () => listeners.delete(fn);
-    },
-    watchMembers(cid, gid, next) {
-      const g = listFor(cid).find(g => g.id === gid), c = getContext();
-      queueMicrotask(() => next((g?.memberIds || []).map(id => ({ id, firstName: c.members[id]?.name.split(' ')[0] || 'Member', photo: c.members[id]?.photo || '', bio: '' }))));
-      return () => {};
-    },
-    async save(cid, id, data, role) {
-      const c = getContext(), ownRole = churchRole(c), old = listFor(cid).find(g => g.id === id);
-      if (ownRole !== 'ADMIN' && groupRole(ownRole, old, c.user.uid) !== 'LEADER') throw new Error('Not authorized.');
-      validateGroup(data);
-      if (role === 'LEADER') data = { ...old, ...Object.fromEntries(['name', 'description', 'meetingDay', 'meetingTime', 'meetingLocation', 'imageUrl'].map(k => [k, data[k]])) };
-      const gid = id || crypto.randomUUID(); byChurch.set(cid, [...listFor(cid).filter(g => g.id !== gid), { ...data, id: gid }]); emit(); return gid;
-    }
-  };
-}
+const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const day = ms => new Date(ms).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+const time = ms => new Date(ms).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+const ago = ms => { const d = Date.now() - ms; if (d < 6e4) return 'Just now'; if (d < 36e5) return Math.floor(d / 6e4) + 'm ago'; if (d < 864e5) return Math.floor(d / 36e5) + 'h ago'; return new Date(ms).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); };
+const pad = n => String(n).padStart(2, '0');
+const localInput = ms => { const d = new Date(ms); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+const KIND_ICON = { Meeting: '👥', Worship: '🙌', Event: '🎉' };
+const PAST = 6 * 3600e3;   // an event stays "upcoming" until 6 hours after it starts
 
-const ms = t => t?.toMillis ? t.toMillis() : (typeof t === 'number' ? t : Date.now());
-const when = t => { const d = ms(t), diff = Date.now() - d; if (diff < 6e4) return 'Just now'; if (diff < 36e5) return Math.floor(diff / 6e4) + 'm ago'; if (diff < 864e5) return Math.floor(diff / 36e5) + 'h ago'; return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); };
-const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const image = url => /^https:\/\//i.test(url || '') ? escape(url) : '';
-export function createSmallGroupsUI({ root, getContext, getApi, sheet, toast, changed }) {
-  let context = null, role = null, groups = [], selected = null, page = 'home', profiles = [], error = '', loading = true;
-  let stop = null, stopMembers = null, stopPrayers = null, generation = 0, signature = '', dialog = null;
-  let prayers = [], prayersLoaded = false, prayedSet = new Set(), prayerFilter = 'active';
-  const current = () => groups.find(g => g.id === selected);
-  const permitted = () => groupRole(role, current(), context?.user?.uid);
+export function createCommunityUI({ root, getContext, getApi, sheet, toast, changed, confirm }) {
+  let ctx = null, key = '', page = 'events', stops = [], gen = 0, dialog = null;
+  let events = [], eventsLoaded = false, prayers = [], prayersLoaded = false, prayed = new Set(), prayerFilter = 'active', showPast = false;
+  const me = () => ctx?.user?.uid;
+  const isLeader = () => ctx?.membership?.role === 'leader';
+  const nameOf = uid => uid === me() ? 'You' : (ctx?.members?.[uid]?.name || 'A former member');
+  const firstName = uid => uid === me() ? 'You' : (ctx?.members?.[uid]?.name || 'Someone').split(/\s+/)[0];
+
   function reset() {
-    dialog?.remove(); dialog = null;
-    generation++; stop?.(); stopMembers?.(); stopPrayers?.(); stop = stopMembers = stopPrayers = null;
-    signature = ''; context = null; role = null; groups = []; selected = null; profiles = []; loading = true; error = ''; page = 'home';
-    prayers = []; prayersLoaded = false; prayedSet = new Set();
+    gen++; stops.forEach(f => f()); stops = []; dialog?.remove(); dialog = null;
+    ctx = null; key = ''; events = []; prayers = []; eventsLoaded = prayersLoaded = false; prayed = new Set();
     root.replaceChildren(); changed?.();
   }
-  function select(id) {
-    const same = id === selected && stopPrayers;
-    stopMembers?.(); stopMembers = null; profiles = []; selected = id;
-    const epoch = generation, gid = id;
-    if (!same){
-      stopPrayers?.(); stopPrayers = null; prayers = []; prayersLoaded = false; prayedSet = new Set();
-      const access = prayerAccess(role, groups.find(g => g.id === id), context?.user?.uid);
-      if (id && access) stopPrayers = getApi().watchPrayers(context.churchId, id, access, context.user.uid, list => {
-        if (epoch !== generation || selected !== gid) return;
-        prayers = list.sort((a, b) => ms(b.createdAt) - ms(a.createdAt)); prayersLoaded = true;
-        list.filter(p => !prayedSet.has(p.id)).forEach(p => getApi().prayedByMe(context.churchId, gid, p.id).then(yes => { if (yes && selected === gid){ prayedSet.add(p.id); render(); } }).catch(() => {}));
-        render(); changed?.();
-      }, () => { if (epoch === generation && selected === gid){ prayers = []; prayersLoaded = true; render(); } });
-    }
-    if (id) stopMembers = getApi().watchMembers(context.churchId, id, list => {
-      if (epoch !== generation || selected !== gid) return;
-      profiles = list; render();
-    }, () => { if (epoch === generation && selected === gid) { profiles = []; error = 'Could not load the group directory. Check access and try again.'; render(); } });
-  }
-  async function sync() {
+  function sync() {
     const c = getContext();
-    if (!c.user || !c.church || !['member', 'leader'].includes(c.membership?.role)) { reset(); return; }
-    const key = `${c.churchId}:${c.user.uid}:${c.membership.role}:${c.church.createdBy}`;
-    context = c;
-    if (signature === key) { render(); return; }
-    reset(); context = c; signature = key;
-    const epoch = generation;
-    try {
-      const claims = await getApi().claims();
-      if (epoch !== generation) return;
-      role = churchRole(c, claims);
-      stop = getApi().watch(c.churchId, role, c.user.uid, list => {
-        if (epoch !== generation) return;
-        groups = list.sort((a, b) => a.name.localeCompare(b.name)); loading = false; error = '';
-        if (!groups.some(g => g.id === selected)) select(groups.find(g => g.status === 'active')?.id || groups[0]?.id || null);
-        else select(selected); // refresh directory after an assignment changes
-        render(); changed?.();
-      }, () => {
-        if (epoch !== generation) return;
-        stopMembers?.(); stopMembers = null; groups = []; profiles = []; selected = null; loading = false;
-        error = 'Small Groups could not load. Ask your administrator to publish the updated Firestore rules, then retry.'; render(); changed?.();
-      });
-    } catch {
-      if (epoch !== generation) return;
-      loading = false; error = 'Could not verify your access. Please retry.'; render();
-    }
+    if (!c.user || !c.churchId || !['member', 'leader'].includes(c.membership?.role)) { if (ctx) reset(); return; }
+    const k = `${c.churchId}:${c.user.uid}:${c.membership.role}`;
+    ctx = c;
+    if (k === key) { render(); return; }
+    const keepPage = page;
+    reset(); ctx = c; key = k; page = keepPage;
+    const g = gen, api = getApi();
+    stops.push(api.watchEvents(list => { if (g !== gen) return; events = list; eventsLoaded = true; render(); changed?.(); },
+      () => { if (g !== gen) return; eventsLoaded = true; events = []; render(); }));
+    stops.push(api.watchPrayers(isLeader(), list => {
+      if (g !== gen) return;
+      prayers = list.sort((a, b) => b.createdAt - a.createdAt); prayersLoaded = true;
+      for (const p of list) if (!prayed.has(p.id)) api.prayedByMe(p.id).then(y => { if (y && g === gen) { prayed.add(p.id); render(); } }).catch(() => {});
+      render(); changed?.();
+    }, () => { if (g !== gen) return; prayersLoaded = true; prayers = []; render(); }));
     render();
   }
+
+  /* ---------- render ---------- */
   function render() {
-    const g = current(), access = permitted();
-    root.innerHTML = `<div class="sg-intro"><span class="sg-eyebrow">Life together</span><h2>Small Groups</h2><p>Know each other. Care for each other. Grow together.</p></div>`;
-    if (loading) { root.insertAdjacentHTML('beforeend', '<p role="status">Loading your groups…</p>'); return; }
-    if (error) { root.insertAdjacentHTML('beforeend', `<div class="sg-card" role="alert"><p>${escape(error)}</p><button class="btn secondary" data-sg="retry">Retry</button></div>`); return; }
-    root.insertAdjacentHTML('beforeend', `<div class="sg-controls">${groups.length ? `<label>Your groups<select id="sgSelect">${groups.map(x => `<option value="${escape(x.id)}" ${x.id === selected ? 'selected' : ''}>${escape(x.name)}${x.status === 'archived' ? ' (archived)' : ''}</option>`).join('')}</select></label>` : ''}<div class="sg-nav"><button data-sg="home" class="${page === 'home' ? 'on' : ''}">My Group</button><button data-sg="prayer" class="${page === 'prayer' ? 'on' : ''}">Prayer</button><button data-sg="members" class="${page === 'members' ? 'on' : ''}">Members</button>${['ADMIN', 'PASTOR'].includes(role) ? `<button data-sg="admin" class="${page === 'admin' ? 'on' : ''}">${role === 'ADMIN' ? 'Small Groups Admin' : 'All Groups'}</button>` : ''}</div></div>`);
-    if (page === 'admin' && ['ADMIN', 'PASTOR'].includes(role)) {
-      root.insertAdjacentHTML('beforeend', `${role === 'ADMIN' ? '<button class="compose-btn" data-sg="create">＋ Create Group</button>' : ''}${groups.map(x => `<article class="sg-card"><span class="sg-eyebrow">${escape(x.status)}</span><h3>${escape(x.name)}</h3><p>${x.memberIds.length} members · ${escape(x.meetingDay || 'Schedule to come')} ${escape(x.meetingTime)}</p><div class="sg-actions"><button class="btn secondary" data-sg="view" data-id="${escape(x.id)}">View Group</button>${role === 'ADMIN' ? `<button class="btn secondary" data-sg="edit" data-id="${escape(x.id)}">Edit & assign members</button>` : ''}</div></article>`).join('') || '<div class="empty">No small groups yet.</div>'}`);
-      return;
-    }
-    if (!g || !access) {
-      root.insertAdjacentHTML('beforeend', `<div class="sg-card"><h3>A place to belong</h3><p>You haven’t been assigned to a small group yet. Ask your church administrator to help you find one.</p>${role === 'ADMIN' ? '<button class="btn" data-sg="create">Create Group</button>' : ''}</div>`); return;
-    }
-    if (page === 'members') {
-      root.insertAdjacentHTML('beforeend', `<h3>${escape(g.name)} · Members</h3><p class="sg-muted">Only names and optional profile details are shown.</p><div class="sg-directory">${profiles.filter(p => g.memberIds.includes(p.id)).map(p => `<article class="sg-member"><div class="avatar">${image(p.photo) ? `<img src="${image(p.photo)}" alt="" referrerpolicy="no-referrer">` : escape(p.firstName.slice(0, 1))}</div><div><h3>${escape(p.firstName)}</h3><span class="sg-muted">${p.id === g.leaderId ? 'Leader' : 'Member'}</span>${p.bio ? `<p>${escape(p.bio)}</p>` : ''}</div></article>`).join('') || '<p role="status">Loading members…</p>'}</div>`); return;
-    }
-    if (page === 'prayer') { root.insertAdjacentHTML('beforeend', prayerPage(g, prayerAccess(role, g, context.user.uid))); return; }
-    const leader = profiles.find(p => p.id === g.leaderId)?.firstName || 'Group Leader';
-    root.insertAdjacentHTML('beforeend', `<article class="sg-card sg-hero">${image(g.imageUrl) ? `<img class="sg-cover" src="${image(g.imageUrl)}" alt="${escape(g.name)}" referrerpolicy="no-referrer">` : '<div class="sg-symbol" aria-hidden="true">🌱</div>'}<span class="sg-eyebrow">${g.status === 'archived' ? 'Archived group' : 'Your Small Group'}</span><h2>${escape(g.name)}</h2><p>${escape(g.description)}</p><dl class="sg-details"><div><dt>Leader</dt><dd>${escape(leader)}</dd></div><div><dt>Members</dt><dd>${g.memberIds.length}</dd></div><div><dt>Meeting schedule</dt><dd>${escape(g.meetingDay || 'To be announced')} ${escape(g.meetingTime)}</dd></div><div><dt>Location</dt><dd>${escape(g.meetingLocation || 'To be announced')}</dd></div></dl><div class="sg-actions"><button class="btn" data-sg="members">Meet your group</button>${['ADMIN', 'LEADER'].includes(access) ? `<button class="btn secondary" data-sg="edit" data-id="${escape(g.id)}">Edit group details</button>` : ''}</div></article>${quickActions(g)}${activity()}`);
+    if (!ctx) return;
+    const tabs = [['events', 'Events'], ['prayer', 'Prayer'], ['members', 'Members']];
+    root.innerHTML = `<div class="sg-intro compact"><span class="sg-eyebrow">${esc(ctx.groupName || 'Our group')}</span><p>Know each other. Pray for each other. Grow together.</p></div>
+      <div class="sg-nav">${tabs.map(([k, l]) => `<button data-sg="tab" data-k="${k}" class="${page === k ? 'on' : ''}">${l}</button>`).join('')}</div>
+      <div class="sg-page">${page === 'events' ? eventsPage() : page === 'prayer' ? prayerPage() : membersPage()}</div>`;
   }
-  const nameOf = uid => profiles.find(p => p.id === uid)?.firstName || 'A member';
-  function quickActions(g) {
-    const active = prayers.filter(p => p.status === 'active').length;
-    return `<div class="sg-quick"><button data-sg="prayer"><span>🙏</span><b>Prayer</b><small>${active ? `${active} active request${active > 1 ? 's' : ''}` : 'Share a request'}</small></button><button data-sg="members"><span>👋</span><b>Members</b><small>${g.memberIds.length} people</small></button><button disabled><span>💬</span><b>Discussion</b><small>Coming soon</small></button><button disabled><span>📅</span><b>Next Meeting</b><small>${escape(g.meetingDay ? `${g.meetingDay} ${g.meetingTime}` : 'Coming soon')}</small></button></div>`;
+
+  function eventsPage() {
+    const now = Date.now();
+    const upcoming = events.filter(e => e.startAt > now - PAST).sort((a, b) => a.startAt - b.startAt);
+    const past = events.filter(e => e.startAt <= now - PAST).sort((a, b) => b.startAt - a.startAt);
+    return (isLeader() ? '<button class="compose-btn" data-sg="newEvent">＋ New event</button>' : '') +
+      (!eventsLoaded ? '<p role="status">Loading events…</p>' :
+        upcoming.length ? upcoming.map(e => eventCard(e, false)).join('') : `<div class="empty">No upcoming events.${isLeader() ? ' Tap “New event” to add a meeting or worship time.' : ' Your leaders will post meetings and events here.'}</div>`) +
+      (past.length ? `<button class="link-btn sg-past-toggle" data-sg="past">${showPast ? 'Hide past events' : `Show past events (${past.length})`}</button>${showPast ? past.map(e => eventCard(e, true)).join('') : ''}` : '');
   }
-  function activity() {
-    const items = [];
-    for (const p of prayers) {
-      items.push({ at: ms(p.createdAt), text: `${escape(nameOf(p.uid))} shared a prayer request${p.privacy === 'leaders' ? ' with leaders' : ''}.` });
-      if (p.status === 'answered') items.push({ at: ms(p.answeredAt), text: `${escape(nameOf(p.uid))}'s prayer was answered 🎉` });
-    }
-    items.sort((a, b) => b.at - a.at);
-    return `<article class="sg-card"><h3>Recent activity</h3>${items.length ? `<ul class="sg-activity">${items.slice(0, 6).map(i => `<li><span>${i.text}</span><small>${when(i.at)}</small></li>`).join('')}</ul>` : `<p>Nothing new yet. Share a prayer request to get started.</p>`}</article>`;
+  function eventCard(e, isPast) {
+    if (e.locked) return `<article class="sg-card"><p class="sg-muted">🔒 Waiting for access. A leader's app shares the key the next time it opens.</p></article>`;
+    const s = rsvpSummary(e.rsvp, ctx.members), mine = e.rsvp?.[me()] || '';
+    const names = list => list.map(firstName).join(', ');
+    return `<article class="sg-card sg-event ${isPast ? 'past' : ''}">
+      <div class="sg-event-date"><b>${esc(new Date(e.startAt).toLocaleDateString('en-US', { month: 'short' }))}</b><span>${new Date(e.startAt).getDate()}</span></div>
+      <div class="sg-event-body">
+        <span class="sg-chip">${KIND_ICON[e.kind] || ''} ${esc(e.kind)}</span>
+        <h3>${esc(e.title)}</h3>
+        <div class="sg-event-meta">🕒 ${esc(day(e.startAt))} · ${esc(time(e.startAt))}${e.location ? `<br>📍 ${esc(e.location)}` : ''}</div>
+        ${e.description ? `<p>${esc(e.description)}</p>` : ''}
+        ${isPast ? '' : `<div class="sg-rsvp" role="group" aria-label="Will you come?">${Object.entries(RSVP).map(([k, l]) => `<button data-sg="rsvp" data-id="${esc(e.id)}" data-r="${k}" class="${mine === k ? 'on ' + k : ''}" aria-pressed="${mine === k}">${l}</button>`).join('')}</div>`}
+        <details class="sg-who"><summary>✅ ${s.going.length} going · 🤔 ${s.maybe.length} maybe · ${s.no.length} can't go</summary>
+          ${s.going.length ? `<p><b>Going:</b> ${esc(names(s.going))}</p>` : ''}${s.maybe.length ? `<p><b>Maybe:</b> ${esc(names(s.maybe))}</p>` : ''}${s.no.length ? `<p><b>Can't go:</b> ${esc(names(s.no))}</p>` : ''}
+          ${!s.going.length && !s.maybe.length && !s.no.length ? '<p class="sg-muted">No answers yet.</p>' : ''}</details>
+        ${isLeader() ? `<div class="sg-actions sg-small"><button class="link-btn" data-sg="editEvent" data-id="${esc(e.id)}">Edit</button><button class="link-btn danger" data-sg="delEvent" data-id="${esc(e.id)}">Delete</button></div>` : ''}
+      </div></article>`;
   }
-  const seenKey = () => `sgPrayerSeen:${context?.churchId}:${selected}`;
-  const seenAt = () => { try { return Number(localStorage.getItem(seenKey())) || Date.now() - 7 * 864e5; } catch { return Date.now() - 7 * 864e5; } };
-  function prayerPage(g, access) {
-    try { localStorage.setItem(seenKey(), String(Date.now())); } catch {}
-    const isLeader = access === 'LEADER', me = context.user.uid;
+
+  function prayerPage() {
     const list = prayers.filter(p => p.status === prayerFilter);
-    const counts = { active: prayers.filter(p => p.status === 'active').length, answered: prayers.filter(p => p.status === 'answered').length };
+    const n = { active: prayers.filter(p => p.status === 'active').length, answered: prayers.filter(p => p.status === 'answered').length };
     const card = p => {
-      const mine = p.uid === me, canAnswer = mine || isLeader, did = prayedSet.has(p.id);
+      if (p.locked) return `<article class="sg-card"><p class="sg-muted">🔒 Waiting for access…</p></article>`;
+      const mine = p.uid === me(), can = mine || isLeader(), did = prayed.has(p.id);
       return `<article class="sg-card sg-prayer ${p.status === 'answered' ? 'answered' : ''}">
-        <div class="sg-prayer-top"><span class="sg-chip">${escape(p.category)}</span>${p.privacy === 'leaders' ? '<span class="sg-chip lock">🔒 Leaders only</span>' : ''}<span class="sg-chip ${p.status === 'answered' ? 'ok' : ''}">${p.status === 'answered' ? 'Answered' : 'Active'}</span></div>
-        <h3>${escape(p.title)}</h3><p>${escape(p.request)}</p>
-        ${p.status === 'answered' && p.testimony ? `<div class="sg-testimony"><b>Testimony</b><p>${escape(p.testimony)}</p></div>` : ''}
-        <div class="sg-prayer-meta">${escape(mine ? 'You' : nameOf(p.uid))} · ${when(p.createdAt)} · 🙏 ${p.prayedCount} ${p.prayedCount === 1 ? 'person' : 'people'} praying</div>
-        <div class="sg-actions">${p.status === 'active' ? `<button class="btn ${did ? 'secondary' : ''}" data-sg="pray" data-id="${escape(p.id)}" ${did ? 'disabled' : ''}>${did ? '✓ You prayed' : '🙏 I Prayed'}</button>` : ''}
-          ${canAnswer ? `<button class="btn secondary" data-sg="answer" data-id="${escape(p.id)}">${p.status === 'answered' ? (p.testimony ? 'Edit testimony' : 'Add testimony') : 'Mark as answered'}</button>` : ''}
-          ${canAnswer ? `<button class="link-btn danger" data-sg="delprayer" data-id="${escape(p.id)}">Delete</button>` : ''}</div>
+        <div class="sg-prayer-top"><span class="sg-chip">${esc(p.category)}</span>${p.privacy === 'leaders' ? '<span class="sg-chip lock">🔒 Leaders only</span>' : ''}<span class="sg-chip ${p.status === 'answered' ? 'ok' : ''}">${p.status === 'answered' ? 'Answered' : 'Active'}</span></div>
+        <h3>${esc(p.title)}</h3><p>${esc(p.request)}</p>
+        ${p.status === 'answered' && p.testimony ? `<div class="sg-testimony"><b>Testimony</b><p>${esc(p.testimony)}</p></div>` : ''}
+        <div class="sg-prayer-meta">${esc(nameOf(p.uid))} · ${esc(ago(p.createdAt))} · 🙏 ${p.prayedCount} ${p.prayedCount === 1 ? 'person' : 'people'} praying</div>
+        <div class="sg-actions">${p.status === 'active' ? `<button class="btn ${did ? 'secondary' : ''}" data-sg="pray" data-id="${esc(p.id)}" ${did ? 'disabled' : ''}>${did ? '✓ You prayed' : '🙏 I Prayed'}</button>` : ''}
+          ${can ? `<button class="btn secondary" data-sg="answer" data-id="${esc(p.id)}">${p.status === 'answered' ? (p.testimony ? 'Edit testimony' : 'Add testimony') : 'Mark as answered'}</button><button class="link-btn danger" data-sg="delPrayer" data-id="${esc(p.id)}">Delete</button>` : ''}</div>
       </article>`;
     };
-    const canPost = g.memberIds.includes(me) && g.status === 'active';
-    return `${canPost ? '<button class="compose-btn" data-sg="newprayer">＋ Share a prayer request</button>' : `<p class="sg-muted">${g.status !== 'active' ? 'This group is archived.' : 'You can read group-wide requests. Only group members can share new ones.'}</p>`}
-      <div class="sg-nav sg-sub"><button data-sg="pf-active" class="${prayerFilter === 'active' ? 'on' : ''}">Active · ${counts.active}</button><button data-sg="pf-answered" class="${prayerFilter === 'answered' ? 'on' : ''}">Answered · ${counts.answered}</button></div>
+    return `<button class="compose-btn" data-sg="newPrayer">＋ Share a prayer request</button>
+      <div class="sg-nav sg-sub"><button data-sg="pf" data-k="active" class="${prayerFilter === 'active' ? 'on' : ''}">Active · ${n.active}</button><button data-sg="pf" data-k="answered" class="${prayerFilter === 'answered' ? 'on' : ''}">Answered · ${n.answered}</button></div>
       ${!prayersLoaded ? '<p role="status">Loading prayer requests…</p>' : list.length ? list.map(card).join('') : `<div class="empty">${prayerFilter === 'active' ? 'No prayer requests right now. Be the first to share one.' : 'No answered prayers yet.'}</div>`}
-      <p class="sg-muted">“Leaders only” requests are visible only to you and your group leader. Prayer requests are protected so only your group can see them, but please don’t share anything you wouldn’t say in your group.</p>`;
+      <p class="sg-muted">🔒 Prayer requests are end-to-end encrypted. “Leaders only” requests can be opened only by you and your group's leaders.</p>`;
   }
-  function newPrayer() {
-    const g = current(); if (!g) return; const epoch = generation, gid = g.id;
+
+  function membersPage() {
+    const list = Object.entries(ctx.members || {}).filter(([, m]) => ['member', 'leader'].includes(m.role))
+      .sort(([, a], [, b]) => (b.role === 'leader') - (a.role === 'leader') || a.name.localeCompare(b.name, 'en'));
+    return `<p class="sg-muted">${list.length} ${list.length === 1 ? 'person' : 'people'} in ${esc(ctx.groupName || 'this group')}</p><div class="sg-directory">${list.map(([uid, m]) => `<article class="sg-member"><div class="avatar">${/^https:\/\//.test(m.photo || '') ? `<img src="${esc(m.photo)}" alt="" referrerpolicy="no-referrer">` : esc((m.name || '?').slice(0, 1))}</div><div><h3>${esc(m.name)}${uid === me() ? ' <small class="sg-muted">(you)</small>' : ''}</h3><span class="sg-muted">${m.role === 'leader' ? 'Leader' : 'Member'}</span></div></article>`).join('')}</div>`;
+  }
+
+  /* ---------- actions ---------- */
+  const fail = (bg, err) => { const el = bg.querySelector('.sg-error'); if (el) el.textContent = err?.message === 'no-key' ? 'Waiting for access to this group. Try again in a moment.' : err?.code === 'permission-denied' ? "You don't have permission to do that." : (err?.message || 'Something went wrong. Please try again.'); };
+  function eventForm(id) {
+    const e = events.find(x => x.id === id);
+    const start = e?.startAt || (() => { const d = new Date(); d.setDate(d.getDate() + ((5 - d.getDay() + 7) % 7 || 7)); d.setHours(19, 30, 0, 0); return d.getTime(); })();
     dialog?.remove();
-    const bg = sheet(`<form class="sg-form scroll"><h2>Share a prayer request</h2>
+    const bg = dialog = sheet(`<form class="sg-form scroll"><h2>${e ? 'Edit event' : 'New event'}</h2>
+      <label>Type<select name="kind">${EVENT_KINDS.map(k => `<option ${e?.kind === k ? 'selected' : ''}>${k}</option>`).join('')}</select></label>
+      <label>Title<input name="title" maxlength="80" required value="${esc(e?.title || '')}" placeholder="e.g. Friday Night Gathering"></label>
+      <label>Date & time<input name="startAt" type="datetime-local" required value="${localInput(start)}"></label>
+      <label>Location<input name="location" maxlength="160" value="${esc(e?.location || '')}" placeholder="e.g. Education Building, 2nd floor"></label>
+      <label>Details<textarea name="description" maxlength="1000" placeholder="What should people know or bring?">${esc(e?.description || '')}</textarea></label>
+      <p class="sg-error" role="alert"></p>
+      <div class="sg-actions"><button type="button" class="btn secondary" data-close>Cancel</button><button type="submit" class="btn">${e ? 'Save' : 'Post event'}</button></div></form>`);
+    bg.querySelector('form').addEventListener('submit', async ev => {
+      ev.preventDefault(); const f = new FormData(ev.currentTarget), btn = ev.currentTarget.querySelector('[type=submit]');
+      const data = { kind: f.get('kind'), title: String(f.get('title') || '').trim(), location: String(f.get('location') || '').trim(), description: String(f.get('description') || '').trim(), startAt: new Date(String(f.get('startAt'))).getTime() };
+      btn.disabled = true;
+      try { validateEvent(data); await getApi().saveEvent(id || null, data); bg.remove(); toast(e ? 'Event updated' : 'Event posted'); }
+      catch (err) { fail(bg, err); btn.disabled = false; }
+    });
+  }
+  function prayerForm() {
+    dialog?.remove();
+    const bg = dialog = sheet(`<form class="sg-form scroll"><h2>Share a prayer request</h2>
       <label>Title<input name="title" maxlength="80" required placeholder="e.g. School"></label>
       <label>Prayer request<textarea name="request" maxlength="1000" required placeholder="What can your group pray for?"></textarea></label>
       <label>Category<select name="category">${PRAYER_CATEGORIES.map(c => `<option>${c}</option>`).join('')}</select></label>
       <fieldset><legend>Who can see this?</legend>
-        <label class="sg-check"><input type="radio" name="privacy" value="group" checked> <span><b>My group</b><br><small class="sg-muted">Everyone in ${escape(g.name)}</small></span></label>
-        <label class="sg-check"><input type="radio" name="privacy" value="leaders"> <span><b>Leaders only</b><br><small class="sg-muted">Only your group leader</small></span></label></fieldset>
+        <label class="sg-check"><input type="radio" name="privacy" value="group" checked><span><b>Everyone in ${esc(ctx.groupName || 'the group')}</b></span></label>
+        <label class="sg-check"><input type="radio" name="privacy" value="leaders"><span><b>Leaders only</b><br><small class="sg-muted">Only the group's leaders can open it</small></span></label></fieldset>
       <p class="sg-error" role="alert"></p>
       <div class="sg-actions"><button type="button" class="btn secondary" data-close>Cancel</button><button type="submit" class="btn">Share</button></div></form>`);
-    dialog = bg;
-    bg.querySelector('form').addEventListener('submit', async e => {
-      e.preventDefault(); const f = new FormData(e.currentTarget), btn = e.currentTarget.querySelector('[type=submit]');
+    bg.querySelector('form').addEventListener('submit', async ev => {
+      ev.preventDefault(); const f = new FormData(ev.currentTarget), btn = ev.currentTarget.querySelector('[type=submit]');
       const data = { title: String(f.get('title') || '').trim(), request: String(f.get('request') || '').trim(), category: f.get('category'), privacy: f.get('privacy') };
       btn.disabled = true;
-      try { validatePrayer(data); await getApi().addPrayer(context.churchId, gid, data); if (epoch !== generation) return; bg.remove(); prayerFilter = 'active'; render(); toast('Prayer request shared'); }
-      catch (err) { bg.querySelector('.sg-error').textContent = err.code === 'permission-denied' ? 'You do not have permission, or the updated Firestore rules are not published.' : err.message || 'Could not share. Please try again.'; btn.disabled = false; }
+      try { validatePrayer(data); await getApi().addPrayer(data); bg.remove(); prayerFilter = 'active'; render(); toast('Prayer request shared'); }
+      catch (err) { fail(bg, err); btn.disabled = false; }
     });
   }
-  async function pray(pid) {
-    if (prayedSet.has(pid)) return;
-    prayedSet.add(pid); render();
-    try { await getApi().pray(context.churchId, selected, pid); toast('Thank you for praying 🙏'); }
-    catch (err) { const yes = await getApi().prayedByMe(context.churchId, selected, pid).catch(() => false); if (!yes) prayedSet.delete(pid); render(); if (!yes) toast('Could not save. Please try again.'); }
+  async function pray(id) {
+    if (prayed.has(id)) return;
+    prayed.add(id); render();
+    try { await getApi().pray(id); toast('Thank you for praying 🙏'); }
+    catch { const y = await getApi().prayedByMe(id).catch(() => false); if (!y) { prayed.delete(id); toast('Could not save. Please try again.'); } render(); }
   }
-  function answer(pid) {
-    const p = prayers.find(x => x.id === pid); if (!p) return;
+  function answer(id) {
+    const p = prayers.find(x => x.id === id); if (!p) return;
     const was = p.status === 'answered';
     dialog?.remove();
-    const bg = sheet(`<form class="sg-form scroll"><h2>${was ? 'Testimony' : 'Answered prayer 🎉'}</h2><p class="sg-muted">${escape(p.title)}</p>
-      <label>Share how God answered (optional)<textarea name="t" maxlength="500" placeholder="A short testimony for your group">${escape(p.testimony)}</textarea></label>
+    const bg = dialog = sheet(`<form class="sg-form scroll"><h2>${was ? 'Testimony' : 'Answered prayer 🎉'}</h2><p class="sg-muted">${esc(p.title)}</p>
+      <label>Share how God answered (optional)<textarea name="t" maxlength="500" placeholder="A short testimony for your group">${esc(p.testimony)}</textarea></label>
       <p class="sg-error" role="alert"></p>
       <div class="sg-actions"><button type="button" class="btn secondary" data-close>Cancel</button><button type="submit" class="btn">${was ? 'Save' : 'Mark as answered'}</button></div></form>`);
-    dialog = bg;
-    bg.querySelector('form').addEventListener('submit', async e => {
-      e.preventDefault(); const btn = e.currentTarget.querySelector('[type=submit]'); btn.disabled = true;
-      try { await getApi().answerPrayer(context.churchId, selected, pid, new FormData(e.currentTarget).get('t'), was); bg.remove(); if (!was){ prayerFilter = 'answered'; render(); } toast(was ? 'Saved' : 'Praise God! Marked as answered'); }
-      catch (err) { bg.querySelector('.sg-error').textContent = err.message || 'Could not save.'; btn.disabled = false; }
+    bg.querySelector('form').addEventListener('submit', async ev => {
+      ev.preventDefault(); const btn = ev.currentTarget.querySelector('[type=submit]'); btn.disabled = true;
+      try { await getApi().answerPrayer(p, String(new FormData(ev.currentTarget).get('t') || '').trim().slice(0, 500)); bg.remove(); if (!was) { prayerFilter = 'answered'; render(); } toast(was ? 'Saved' : 'Praise God! Marked as answered'); }
+      catch (err) { fail(bg, err); btn.disabled = false; }
     });
   }
-  async function deletePrayer(pid) {
-    const bg = sheet(`<p style="font-weight:600">Delete this prayer request? This can't be undone.</p><div class="sg-actions"><button class="btn secondary" data-close>Cancel</button><button class="btn" data-yes style="background:var(--danger);color:#fff">Delete</button></div>`);
-    bg.querySelector('[data-yes]').addEventListener('click', async () => { bg.remove(); try { await getApi().deletePrayer(context.churchId, selected, pid); toast('Deleted'); } catch { toast('Could not delete.'); } });
-  }
-  function edit(id) {
-    const c = getContext(), g = groups.find(x => x.id === id), access = groupRole(role, g, c.user.uid);
-    if (role !== 'ADMIN' && access !== 'LEADER') return;
-    const admin = role === 'ADMIN', epoch = generation;
-    const members = Object.entries(c.members).filter(([, m]) => ['member', 'leader'].includes(m.role));
-    const value = key => escape(g?.[key] || '');
-    const input = (label, key, max, type = 'text') => `<label>${label}<input name="${key}" type="${type}" maxlength="${max}" value="${value(key)}" ${key === 'name' ? 'required' : ''}></label>`;
-    dialog?.remove();
-    const bg = sheet(`<form id="sgForm" class="sg-form scroll"><h2>${g ? 'Edit Group' : 'Create Group'}</h2>${input('Group Name', 'name', 60)}<label>Description<textarea name="description" maxlength="500">${value('description')}</textarea></label><label>Meeting Day<select name="meetingDay">${['', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map(day => `<option ${g?.meetingDay === day ? 'selected' : ''}>${day}</option>`).join('')}</select></label>${input('Meeting Time', 'meetingTime', 5, 'time')}${input('Meeting Location', 'meetingLocation', 160)}${input('Group Image (HTTPS URL, optional)', 'imageUrl', 2048, 'url')}${admin ? `<label>Leader<select name="leaderId" required><option value="">Choose a leader</option>${members.map(([uid, m]) => `<option value="${escape(uid)}" ${g?.leaderId === uid ? 'selected' : ''}>${escape(m.name)}</option>`).join('')}</select></label><fieldset><legend>Members · leader is included automatically</legend>${members.map(([uid, m]) => `<label class="sg-check"><input type="checkbox" name="memberIds" value="${escape(uid)}" ${g?.memberIds.includes(uid) ? 'checked' : ''}>${escape(m.name)}</label>`).join('')}</fieldset><label>Status<select name="status"><option value="active">Active</option><option value="archived" ${g?.status === 'archived' ? 'selected' : ''}>Archived</option></select></label>` : ''}<p class="sg-muted">Group details are visible to assigned members and authorized church staff. Don’t include private care notes.</p><p class="sg-error" role="alert"></p><div class="sg-actions"><button type="button" class="btn secondary" data-close>Cancel</button><button type="submit" class="btn">Save Group</button></div></form>`);
-    dialog = bg;
-    bg.querySelector('form').addEventListener('submit', async e => {
-      e.preventDefault(); const form = e.currentTarget, button = form.querySelector('[type="submit"]');
-      if (epoch !== generation) { bg.remove(); return; }
-      const fields = new FormData(form), data = Object.fromEntries(['name', 'description', 'meetingDay', 'meetingTime', 'meetingLocation', 'imageUrl'].map(k => [k, String(fields.get(k) || '').trim()]));
-      Object.assign(data, admin ? { leaderId: fields.get('leaderId'), memberIds: [...new Set([...fields.getAll('memberIds'), fields.get('leaderId')])], status: fields.get('status') } : { leaderId: g.leaderId, memberIds: g.memberIds, status: g.status });
-      button.disabled = true;
-      try {
-        const saved = await getApi().save(c.churchId, id, data, admin ? 'ADMIN' : 'LEADER');
-        if (epoch !== generation) return;
-        select(saved); page = 'home'; render(); bg.remove(); toast('Group saved');
-      } catch (err) { form.querySelector('.sg-error').textContent = err.code === 'permission-denied' ? 'You do not have permission, or the updated Firestore rules are not published.' : err.message || 'Could not save. Please try again.'; }
-      finally { button.disabled = false; }
-    });
-  }
-  root.addEventListener('change', e => { if (e.target.id === 'sgSelect') { select(e.target.value); page = 'home'; render(); } });
-  root.addEventListener('click', e => {
-    const b = e.target.closest('[data-sg]'); if (!b) return;
-    const action = b.dataset.sg;
-    if (action === 'retry') { signature = ''; sync(); }
-    else if (action === 'create' || action === 'edit') edit(b.dataset.id);
-    else if (action === 'view') { select(b.dataset.id); page = 'home'; render(); }
-    else if (['home', 'members', 'admin', 'prayer'].includes(action)) { page = action; render(); }
-    else if (action === 'newprayer') newPrayer();
-    else if (action === 'pray') pray(b.dataset.id);
-    else if (action === 'answer') answer(b.dataset.id);
-    else if (action === 'delprayer') deletePrayer(b.dataset.id);
-    else if (action === 'pf-active' || action === 'pf-answered') { prayerFilter = action.slice(3); render(); }
+
+  root.addEventListener('click', async ev => {
+    const b = ev.target.closest('[data-sg]'); if (!b || !ctx) return;
+    const a = b.dataset.sg, id = b.dataset.id;
+    try {
+      if (a === 'tab') { page = b.dataset.k; render(); }
+      else if (a === 'past') { showPast = !showPast; render(); }
+      else if (a === 'newEvent' || a === 'editEvent') eventForm(id);
+      else if (a === 'delEvent') { if (await confirm('Delete this event for everyone?', 'Delete', true)) { await getApi().deleteEvent(id); toast('Event deleted'); } }
+      else if (a === 'rsvp') { const e = events.find(x => x.id === id), r = b.dataset.r; await getApi().setRsvp(id, e?.rsvp?.[me()] === r ? null : r); }
+      else if (a === 'newPrayer') prayerForm();
+      else if (a === 'pray') pray(id);
+      else if (a === 'answer') answer(id);
+      else if (a === 'delPrayer') { if (await confirm("Delete this prayer request? This can't be undone.", 'Delete', true)) { await getApi().deletePrayer(id); toast('Deleted'); } }
+      else if (a === 'pf') { prayerFilter = b.dataset.k; render(); }
+    } catch (err) { console.error(err); toast(err?.message === 'no-key' ? 'Waiting for access to this group. Try again in a moment.' : "That didn't work. Please try again."); }
   });
-  return { sync, reset, render,
-    summary() { return groups.find(g => g.status === 'active' && g.memberIds.includes(context?.user?.uid)); },
-    // for the News home card: counts only, never prayer content
-    newPrayerCount() { const since = seenAt(); return prayers.filter(p => p.status === 'active' && p.uid !== context?.user?.uid && ms(p.createdAt) > since).length; } };
+
+  return {
+    sync, reset, render,
+    // for the News home card: the next event and how many prayer requests are new (counts only, never content)
+    nextEvent() { const now = Date.now(); return events.filter(e => !e.locked && e.startAt > now - PAST).sort((a, b) => a.startAt - b.startAt)[0] || null; },
+    newPrayerCount(since) { return prayers.filter(p => p.status === 'active' && p.uid !== me() && p.createdAt > since).length; },
+    myRsvp(e) { return e?.rsvp?.[me()] || ''; },
+    show(p) { page = p; render(); }
+  };
 }
