@@ -106,7 +106,58 @@ service cloud.firestore {
             && (request.resource.data.photo == '' || request.resource.data.photo.matches('https://.*'));
           allow delete: if smallGroupAdmin(cid) && !(u in getAfter(groupPath()).data.memberIds);
         }
-        // Future prayer/check-in collections intentionally have no access grants yet.
+        // Phase 2: prayer requests. "Leaders Only" requests are readable only by their author and this
+        // group's leader — never by other members, pastors or admins — and that is enforced here, not in the UI.
+        function grp() { return get(groupPath()).data; }
+        function inGroup() { return isMember(cid) && uid() in grp().memberIds; }
+        function groupLeader() { return inGroup() && grp().leaderId == uid(); }
+        function canSeePrayer(p) {
+          return (inGroup() && (p.privacy == 'group' || p.uid == uid() || groupLeader()))
+            || (smallGroupStaff(cid) && p.privacy == 'group');
+        }
+        match /prayers/{pid} {
+          function prayerPath() { return /databases/$(database)/documents/churches/$(cid)/smallGroups/$(gid)/prayers/$(pid); }
+          function responsePath() { return /databases/$(database)/documents/churches/$(cid)/smallGroups/$(gid)/prayers/$(pid)/responses/$(request.auth.uid); }
+          function authorOrLeader() { return inGroup() && (resource.data.uid == uid() || groupLeader()); }
+          allow read: if canSeePrayer(resource.data);
+          allow create: if inGroup() && grp().status == 'active'
+            && request.resource.data.keys().hasAll(['uid', 'title', 'request', 'category', 'privacy', 'status', 'testimony', 'prayedCount', 'createdAt', 'answeredAt'])
+            && request.resource.data.keys().hasOnly(['uid', 'title', 'request', 'category', 'privacy', 'status', 'testimony', 'prayedCount', 'createdAt', 'answeredAt'])
+            && request.resource.data.uid == uid()
+            && str(request.resource.data.title, 1, 80) && str(request.resource.data.request, 1, 1000)
+            && request.resource.data.category in ['Personal', 'Family', 'Health', 'School', 'Work', 'Faith', 'Other']
+            && request.resource.data.privacy in ['group', 'leaders']
+            && request.resource.data.status == 'active' && request.resource.data.testimony == ''
+            && request.resource.data.prayedCount == 0
+            && request.resource.data.createdAt == request.time && request.resource.data.answeredAt == null;
+          allow update: if canSeePrayer(resource.data) && (
+              // "I Prayed": +1 exactly once per person, together with that person's response record
+              (changed().hasOnly(['prayedCount'])
+                && request.resource.data.prayedCount == resource.data.prayedCount + 1
+                && !exists(responsePath()) && existsAfter(responsePath()))
+              // the author or the group leader marks it answered (testimony optional)
+              || (authorOrLeader() && resource.data.status == 'active'
+                && changed().hasOnly(['status', 'answeredAt', 'testimony'])
+                && request.resource.data.status == 'answered' && request.resource.data.answeredAt == request.time
+                && str(request.resource.data.testimony, 0, 500))
+              // the author (or leader) edits the testimony afterwards
+              || (authorOrLeader() && resource.data.status == 'answered'
+                && changed().hasOnly(['testimony']) && str(request.resource.data.testimony, 0, 500))
+            );
+          allow delete: if authorOrLeader();
+
+          // one record per person: the document id is their uid, so "I Prayed" can't be counted twice
+          match /responses/{u} {
+            allow get: if signedIn() && u == uid();
+            allow create: if signedIn() && u == uid()
+              && canSeePrayer(get(prayerPath()).data)
+              && request.resource.data.keys().hasOnly(['createdAt']) && request.resource.data.createdAt == request.time
+              && getAfter(prayerPath()).data.prayedCount == get(prayerPath()).data.prayedCount + 1;
+            allow update: if false;
+            allow delete: if false;
+          }
+        }
+        // Check-ins and other private care data intentionally have no access grants yet.
       }
 
       match /members/{u} {

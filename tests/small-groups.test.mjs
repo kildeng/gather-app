@@ -67,3 +67,25 @@ test('admin save updates the directory together with membership, keeps bios and 
   assert.deepEqual(records.get(base + '/members/member'), { firstName: 'John', photo: '', bio: '' });
   assert.equal(records.has(base + '/members/old'), false);
 });
+import { validatePrayer, prayerQueries, prayerAccess, PRAYER_CATEGORIES } from '../site/small-groups.js';
+test('prayer validation requires a title, request, known category and privacy level', () => {
+  const ok = { title: 'School', request: 'Please pray for an important exam this week.', category: 'School', privacy: 'group' };
+  assert.equal(validatePrayer(ok), ok);
+  assert.deepEqual([...PRAYER_CATEGORIES], ['Personal', 'Family', 'Health', 'School', 'Work', 'Faith', 'Other']);
+  for (const patch of [{ title: ' ' }, { title: 'x'.repeat(81) }, { request: '' }, { request: 'x'.repeat(1001) }, { category: 'Gossip' }, { privacy: 'public' }]) assert.throws(() => validatePrayer({ ...ok, ...patch }));
+});
+test('members only ask the server for group-wide prayers and their own; staff only for group-wide ones', () => {
+  assert.deepEqual(prayerQueries('LEADER'), [[]]);
+  assert.deepEqual(prayerQueries('MEMBER'), [[['privacy', '==', 'group']], [['uid', '==', '$me']]]);
+  assert.deepEqual(prayerQueries('PASTOR'), [[['privacy', '==', 'group']]]);
+  assert.deepEqual(prayerQueries('ADMIN'), [[['privacy', '==', 'group']]]);
+  assert.deepEqual(prayerQueries(null), []);
+});
+test('prayer access: an admin who leads a group is its leader there; staff outside the group see only group-wide requests', () => {
+  const g = { leaderId: 'lead', memberIds: ['lead', 'm'] };
+  assert.equal(prayerAccess('ADMIN', g, 'lead'), 'LEADER');
+  assert.equal(prayerAccess('MEMBER', g, 'm'), 'MEMBER');
+  assert.equal(prayerAccess('ADMIN', g, 'boss'), 'ADMIN');
+  assert.equal(prayerAccess('PASTOR', g, 'p'), 'PASTOR');
+  assert.equal(prayerAccess('MEMBER', g, 'stranger'), null);
+});

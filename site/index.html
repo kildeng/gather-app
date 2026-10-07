@@ -1270,7 +1270,8 @@ const smallGroups = createSmallGroupsUI({ root: $("#vGroups"), getContext: small
 });
 function smallGroupHomeCard(){
   const group = smallGroups.summary();
-  return `<button class="sg-card sg-home-card" data-act="smallGroups"><span>Your Small Group</span><strong>${esc(group?.name || "Find a place to belong")}</strong><span>${esc(group ? `${group.meetingDay || "Schedule to come"} ${group.meetingTime}` : "View your group and meet your community")}</span><span>View Group →</span></button>`;
+  const n = group ? smallGroups.newPrayerCount() : 0;   // a count only: prayer content never appears on the home page
+  return `<button class="sg-card sg-home-card" data-act="smallGroups"><span>Your Small Group</span><strong>${esc(group?.name || "Find a place to belong")}</strong><span>${esc(group ? `Meets ${group.meetingDay || "— schedule to come"} ${group.meetingTime}` : "View your group and meet your community")}</span>${n ? `<span>🙏 ${n} new prayer request${n > 1 ? "s" : ""} · Someone in your group shared a prayer request.</span>` : ""}<span>View Group →</span></button>`;
 }
 document.addEventListener("click", e => { if (e.target.closest('[data-act="smallGroups"]')) setTab("groups"); });
 function refreshChats(){ if (S.room) renderRoomHeader(); else if (S.tab === "chats") renderChats(); badges(); }

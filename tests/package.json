@@ -4,7 +4,7 @@
   "scripts": {
     "unit": "node --test small-groups.test.mjs",
     "browser": "node browser.cjs",
-    "rules": "firebase emulators:exec --only firestore --project demo-gather --config firebase.json 'node --test firestore.test.mjs'"
+    "rules": "firebase emulators:exec --only firestore --project demo-gather --config ../firebase.json 'node --test firestore.test.mjs'"
   },
   "devDependencies": {
     "@firebase/rules-unit-testing": "4.0.1",

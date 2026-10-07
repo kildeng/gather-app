@@ -1,4 +1,4 @@
-# Small Groups · Phase 1
+# Small Groups · Phase 1–2
 
 Gather의 기존 Google 로그인, Firebase Firestore, 모바일 카드·하단 메뉴를 확장했습니다. Supabase, 새 프레임워크, 런타임 의존성 추가는 없습니다. 기존 암호화 공지·채팅과 소그룹은 별개입니다. 교회 아래에 여러 소그룹을 만들 수 있고, 한 사람은 여러 소그룹에 속할 수 있습니다.
 
@@ -77,3 +77,14 @@ CHROMIUM_PATH=/usr/bin/chromium npm run browser
 ## 다음 단계
 
 Phase 2는 기도 요청·중복 없는 I Prayed·응답 간증과 그룹/리더 전용 읽기 규칙, Phase 3는 날짜 있는 모임·RSVP·출석, Phase 4는 주간 토론, Phase 5는 피드, Phase 6는 비공개 체크인·돌봄, Phase 7은 관리 화면 확대와 보안·모바일 최종 검증입니다. 각 단계에서 별도 데이터 경로, 최소 접근 권한과 테스트를 함께 추가합니다.
+
+
+## Phase 2 · 기도 요청 (완료)
+
+- 데이터: `churches/{churchId}/smallGroups/{groupId}/prayers/{prayerId}` — `uid`, `title`(≤80), `request`(≤1000), `category`(Personal/Family/Health/School/Work/Faith/Other), `privacy`(`group`/`leaders`), `status`(`active`/`answered`), `testimony`(≤500), `prayedCount`, `createdAt`, `answeredAt`.
+- "I Prayed": `prayers/{id}/responses/{uid}` 문서(아이디 = 사용자 uid)와 `prayedCount` +1을 한 번에 저장해야만 허용됩니다. 같은 사람은 두 번 셀 수 없고, 누가 기도했는지는 본인만 볼 수 있습니다.
+- "Leaders Only" 요청은 **작성자와 그 소그룹 리더만** 읽을 수 있습니다. 같은 그룹 회원·목회자·관리자에게도 서버가 돌려주지 않습니다. 회원 앱은 `privacy == 'group'` 조회와 `uid == 본인` 조회만 보냅니다.
+- 그룹 전체 요청은 그룹 회원과 목회자/관리자가 읽을 수 있습니다. 새 요청은 그룹 회원만 올릴 수 있습니다(보관된 그룹 제외).
+- 응답 표시와 간증은 작성자 또는 그룹 리더만 할 수 있습니다. 삭제도 작성자 또는 리더만 가능합니다.
+- 홈(News) 카드에는 새 기도 요청 **개수만** 표시하고 내용은 보여주지 않습니다.
+- 규칙 테스트 13개(에뮬레이터, demo-gather) 통과: 리더 전용 비공개, 다른 그룹 차단, 생성 검증, 중복 I Prayed 차단, 응답 권한.
