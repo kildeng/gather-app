@@ -54,6 +54,29 @@ export function dayLabel(ms, now = Date.now()) {
   return d.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
 }
 
+// Anonymous posts are shown with a Bible name, picked from the post's id (so it stays the same for that post
+// but says nothing about who wrote it, and two posts by one person usually get different names).
+export const BIBLE_NAMES = Object.freeze(['Abraham', 'Sarah', 'Isaac', 'Rebekah', 'Jacob', 'Rachel', 'Leah', 'Joseph', 'Moses', 'Miriam', 'Aaron', 'Joshua', 'Caleb', 'Deborah', 'Gideon', 'Ruth', 'Naomi', 'Boaz', 'Hannah', 'Samuel', 'David', 'Jonathan', 'Abigail', 'Solomon', 'Elijah', 'Elisha', 'Esther', 'Mordecai', 'Nehemiah', 'Ezra', 'Daniel', 'Isaiah', 'Jeremiah', 'Jonah', 'Micah', 'Noah', 'Enoch', 'Job', 'Mary', 'Martha', 'Lazarus', 'Peter', 'Andrew', 'James', 'John', 'Philip', 'Thomas', 'Matthew', 'Barnabas', 'Silas', 'Timothy', 'Titus', 'Lydia', 'Priscilla', 'Aquila', 'Stephen', 'Zacchaeus', 'Dorcas', 'Phoebe', 'Luke']);
+// `avoid`: real members' first names, so an anonymous post is never mistaken for a real person
+export function bibleName(id, avoid = []) {
+  let h = 0; for (const ch of String(id)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  const skip = new Set(avoid.map(n => String(n).toLowerCase()));
+  for (let i = 0; i < BIBLE_NAMES.length; i++) { const n = BIBLE_NAMES[(h + i) % BIBLE_NAMES.length]; if (!skip.has(n.toLowerCase())) return n; }
+  return 'Friend';
+}
+
+// YouVersion (bible.com) links — they open the YouVersion Bible app when it's installed.
+const BOOKS = [['GEN','genesis gen'],['EXO','exodus exod ex'],['LEV','leviticus lev'],['NUM','numbers num'],['DEU','deuteronomy deut dt'],['JOS','joshua josh'],['JDG','judges judg'],['RUT','ruth'],['1SA','1 samuel 1samuel 1 sam 1sam'],['2SA','2 samuel 2samuel 2 sam 2sam'],['1KI','1 kings 1kings 1 kgs'],['2KI','2 kings 2kings 2 kgs'],['1CH','1 chronicles 1chronicles 1 chr'],['2CH','2 chronicles 2chronicles 2 chr'],['EZR','ezra'],['NEH','nehemiah neh'],['EST','esther esth'],['JOB','job'],['PSA','psalms psalm ps psa'],['PRO','proverbs proverb prov pr'],['ECC','ecclesiastes eccl ecc'],['SNG','song of songs song of solomon song'],['ISA','isaiah isa'],['JER','jeremiah jer'],['LAM','lamentations lam'],['EZK','ezekiel ezek'],['DAN','daniel dan'],['HOS','hosea hos'],['JOL','joel'],['AMO','amos'],['OBA','obadiah obad'],['JON','jonah'],['MIC','micah mic'],['NAM','nahum nah'],['HAB','habakkuk hab'],['ZEP','zephaniah zeph'],['HAG','haggai hag'],['ZEC','zechariah zech'],['MAL','malachi mal'],['MAT','matthew matt mt'],['MRK','mark mk'],['LUK','luke lk'],['JHN','john jn'],['ACT','acts'],['ROM','romans rom'],['1CO','1 corinthians 1corinthians 1 cor 1cor'],['2CO','2 corinthians 2corinthians 2 cor 2cor'],['GAL','galatians gal'],['EPH','ephesians eph'],['PHP','philippians phil'],['COL','colossians col'],['1TH','1 thessalonians 1thessalonians 1 thess'],['2TH','2 thessalonians 2thessalonians 2 thess'],['1TI','1 timothy 1timothy 1 tim'],['2TI','2 timothy 2timothy 2 tim'],['TIT','titus'],['PHM','philemon phlm'],['HEB','hebrews heb'],['JAS','james jas'],['1PE','1 peter 1peter 1 pet'],['2PE','2 peter 2peter 2 pet'],['1JN','1 john 1john 1 jn'],['2JN','2 john 2john'],['3JN','3 john 3john'],['JUD','jude'],['REV','revelation revelations rev']];
+const BOOK_INDEX = new Map();
+for (const [code, names] of BOOKS) for (const n of names.match(/(?:[123] )?[a-z]+(?: of [a-z]+)?/g)) if (!BOOK_INDEX.has(n)) BOOK_INDEX.set(n, code);
+export const YOUVERSION = Object.freeze({ home: 'https://www.bible.com/bible/111/GEN.1', verseOfDay: 'https://www.bible.com/verse-of-the-day' });
+export function youVersionUrl(ref) {
+  const m = String(ref || '').trim().toLowerCase().replace(/[–—]/g, '-').match(/^([123]?\s*[a-z]+(?:\s+of\s+[a-z]+)?)\.?\s*(\d+)(?::(\d+)(?:-(\d+))?)?/);
+  const code = m && BOOK_INDEX.get(m[1].replace(/^([123])\s*/, '$1 ').trim());
+  if (!code) return ref ? `https://www.bible.com/search/bible?query=${encodeURIComponent(ref)}` : YOUVERSION.home;
+  return `https://www.bible.com/bible/111/${code}.${m[2]}${m[3] ? '.' + m[3] + (m[4] ? '-' + m[4] : '') : ''}`;
+}
+
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const day = ms => new Date(ms).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
 const time = ms => new Date(ms).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
@@ -69,15 +92,17 @@ export function createCommunityUI({ root, newsRoot, getContext, getApi, sheet, t
   let prayers = [], prayersLoaded = false, prayed = new Set(), prayerFilter = 'active';
   let devotions = [], devLoaded = false, liked = new Set(), comments = [], openComments = new Set();
   let mine = new Set();   // ids of my own anonymous posts (from my private owner records)
+  let prayerComments = [], openPrayerComments = new Set();
   const me = () => ctx?.user?.uid;
   const isLeader = () => ctx?.membership?.role === 'leader';
   const isMine = x => x.uid === me() || (x.anon && mine.has(x.id));
-  const author = x => x.anon ? (mine.has(x.id) ? 'You (anonymous)' : 'Anonymous 🕊') : x.uid === me() ? 'You' : (ctx?.members?.[x.uid]?.name || 'A former member');
+  const realNames = () => Object.values(ctx?.members || {}).map(m => String(m.name || '').split(/\s+/)[0]);
+  const author = x => x.anon ? (mine.has(x.id) ? `You (as ${bibleName(x.id, realNames())})` : `🕊 ${bibleName(x.id, realNames())}`) : x.uid === me() ? 'You' : (ctx?.members?.[x.uid]?.name || 'A former member');
   const firstName = uid => uid === me() ? 'You' : (ctx?.members?.[uid]?.name || 'Someone').split(/\s+/)[0];
 
   function reset() {
     gen++; stops.forEach(f => f()); stops = []; dialog?.remove(); dialog = null;
-    ctx = null; key = ''; events = []; prayers = []; devotions = []; comments = []; mine = new Set();
+    ctx = null; key = ''; events = []; prayers = []; devotions = []; comments = []; mine = new Set(); prayerComments = []; openPrayerComments = new Set();
     eventsLoaded = prayersLoaded = devLoaded = false; prayed = new Set(); liked = new Set(); openComments = new Set();
     root.replaceChildren(); changed?.();
   }
@@ -103,6 +128,7 @@ export function createCommunityUI({ root, newsRoot, getContext, getApi, sheet, t
       render(); changed?.();
     }), live(() => { devLoaded = true; render(); })));
     stops.push(api.watchComments(live(list => { comments = list.sort((a, b) => a.createdAt - b.createdAt); render(); }), () => {}));
+    stops.push(api.watchPrayerComments(live(list => { prayerComments = list.sort((a, b) => a.createdAt - b.createdAt); render(); })));
     render();
   }
 
@@ -117,10 +143,17 @@ export function createCommunityUI({ root, newsRoot, getContext, getApi, sheet, t
     if (focus) { const el = root.querySelector(`[data-cform="${focus}"] textarea`); if (el) { el.value = typed; el.focus(); } }
   }
 
+  // comments under a devotion or a prayer request (kind: 'dev' | 'prayer')
+  function commentBlock(kind, parentId, list) {
+    return `<div class="sg-comments">${list.map(c => `<div class="sg-comment"><div><b>${esc(author(c))}</b> <span class="sg-muted">${esc(ago(c.createdAt))}</span></div><p>${esc(c.text)}</p>${isMine(c) || isLeader() ? `<button class="link-btn danger" data-sg="delComment" data-kind="${kind}" data-parent="${esc(parentId)}" data-id="${esc(c.id)}">Delete</button>` : ''}</div>`).join('') || '<p class="sg-muted">No comments yet.</p>'}
+      <form class="sg-cform" data-cform="${kind}:${esc(parentId)}"><textarea maxlength="1000" rows="1" placeholder="${kind === 'prayer' ? 'Write an encouragement or “Praying for you!”' : 'Write a comment…'}" required></textarea>
+        <div class="sg-cform-row"><label class="sg-check sm" title="Shown with a Bible name instead of yours"><input type="checkbox" name="anon"> Anonymous 🕊</label><button class="btn" type="submit">Send</button></div></form></div>`;
+  }
   function devotionPage() {
-    let html = `<button class="compose-btn" data-sg="newDevotion">＋ Share today's devotion</button>`;
+    let html = `<div class="sg-bible"><a class="btn secondary" href="${YOUVERSION.verseOfDay}" target="_blank" rel="noopener">📖 Verse of the Day</a><a class="btn secondary" href="${YOUVERSION.home}" target="_blank" rel="noopener">Open YouVersion Bible</a></div>
+      <button class="compose-btn" data-sg="newDevotion">＋ Share what moved you today</button>`;
     if (!devLoaded) return html + '<p role="status">Loading…</p>';
-    if (!devotions.length) return html + `<div class="empty">No devotions yet. Share what God showed you in His Word today 📖</div>`;
+    if (!devotions.length) return html + `<div class="empty">No devotions yet. Share what God showed you or how you were moved today 📖</div>`;
     let last = '';
     for (const d of devotions) {
       const label = dayLabel(d.createdAt);
@@ -134,7 +167,7 @@ export function createCommunityUI({ root, newsRoot, getContext, getApi, sheet, t
     const cs = comments.filter(c => c.did === d.id && !c.locked), open = openComments.has(d.id), did = liked.has(d.id);
     return `<article class="sg-card sg-dev">
       <div class="sg-dev-head"><b>${esc(author(d))}</b><span class="sg-muted">${esc(ago(d.createdAt))}</span></div>
-      ${d.ref ? `<div class="sg-dev-ref">📖 ${esc(d.ref)}</div>` : ''}
+      ${d.ref ? `<a class="sg-dev-ref" href="${esc(youVersionUrl(d.ref))}" target="_blank" rel="noopener">📖 ${esc(d.ref)} <small>· YouVersion ↗</small></a>` : ''}
       ${d.verse ? `<blockquote class="sg-dev-verse">${esc(d.verse)}</blockquote>` : ''}
       <p>${esc(d.body)}</p>
       <div class="sg-dev-bar">
@@ -142,9 +175,7 @@ export function createCommunityUI({ root, newsRoot, getContext, getApi, sheet, t
         <button data-sg="comments" data-id="${esc(d.id)}" aria-expanded="${open}">💬 ${cs.length}</button>
         ${isMine(d) || isLeader() ? `<button class="link-btn danger" data-sg="delDevotion" data-id="${esc(d.id)}">Delete</button>` : ''}
       </div>
-      ${open ? `<div class="sg-comments">${cs.map(c => `<div class="sg-comment"><div><b>${esc(author(c))}</b> <span class="sg-muted">${esc(ago(c.createdAt))}</span></div><p>${esc(c.text)}</p>${isMine(c) || isLeader() ? `<button class="link-btn danger" data-sg="delComment" data-id="${esc(c.id)}">Delete</button>` : ''}</div>`).join('') || '<p class="sg-muted">No comments yet.</p>'}
-        <form class="sg-cform" data-cform="${esc(d.id)}"><textarea maxlength="1000" rows="1" placeholder="Write a comment…" required></textarea>
-          <div class="sg-cform-row"><label class="sg-check sm"><input type="checkbox" name="anon"> Anonymous</label><button class="btn" type="submit">Send</button></div></form></div>` : ''}
+      ${open ? commentBlock('dev', d.id, cs) : ''}
     </article>`;
   }
 
@@ -153,14 +184,16 @@ export function createCommunityUI({ root, newsRoot, getContext, getApi, sheet, t
     const n = { active: prayers.filter(p => p.status === 'active').length, answered: prayers.filter(p => p.status === 'answered').length };
     const card = p => {
       if (p.locked) return `<article class="sg-card"><p class="sg-muted">🔒 Waiting for access…</p></article>`;
-      const can = isMine(p) || isLeader(), did = prayed.has(p.id);
+      const can = isMine(p) || isLeader(), did = prayed.has(p.id), pcs = prayerComments.filter(c => c.pid === p.id && !c.locked);
       return `<article class="sg-card sg-prayer ${p.status === 'answered' ? 'answered' : ''}">
         <div class="sg-prayer-top"><span class="sg-chip">${esc(p.category)}</span>${p.privacy === 'leaders' ? '<span class="sg-chip lock">🔒 Leaders only</span>' : ''}<span class="sg-chip ${p.status === 'answered' ? 'ok' : ''}">${p.status === 'answered' ? 'Answered' : 'Active'}</span></div>
         <h3>${esc(p.title)}</h3><p>${esc(p.request)}</p>
-        ${p.status === 'answered' && p.testimony ? `<div class="sg-testimony"><b>Testimony</b><p>${esc(p.testimony)}</p></div>` : ''}
+        ${p.status === 'answered' && p.testimony ? `<div class="sg-testimony"><b>🎉 How God answered</b><p>${esc(p.testimony)}</p></div>` : ''}
         <div class="sg-prayer-meta">${esc(author(p))} · ${esc(ago(p.createdAt))} · 🙏 ${p.prayedCount} ${p.prayedCount === 1 ? 'person' : 'people'} praying</div>
         <div class="sg-actions">${p.status === 'active' ? `<button class="btn ${did ? 'secondary' : ''}" data-sg="pray" data-id="${esc(p.id)}" ${did ? 'disabled' : ''}>${did ? '✓ You prayed' : '🙏 I Prayed'}</button>` : ''}
-          ${can ? `<button class="btn secondary" data-sg="answer" data-id="${esc(p.id)}">${p.status === 'answered' ? (p.testimony ? 'Edit testimony' : 'Add testimony') : 'Mark as answered'}</button><button class="link-btn danger" data-sg="delPrayer" data-id="${esc(p.id)}">Delete</button>` : ''}</div>
+          <button class="btn secondary" data-sg="pcomments" data-id="${esc(p.id)}" aria-expanded="${openPrayerComments.has(p.id)}">💬 ${pcs.length}</button></div>
+        ${can ? `<div class="sg-actions sg-small"><button class="link-btn" data-sg="answer" data-id="${esc(p.id)}">${p.status === 'answered' ? (p.testimony ? 'Edit answered note' : 'Add how it was answered') : '✓ Mark as answered'}</button><button class="link-btn danger" data-sg="delPrayer" data-id="${esc(p.id)}">Delete</button></div>` : ''}
+        ${openPrayerComments.has(p.id) ? commentBlock('prayer', p.id, pcs) : ''}
       </article>`;
     };
     return `<button class="compose-btn" data-sg="newPrayer">＋ Share a prayer request</button>
@@ -217,7 +250,7 @@ export function createCommunityUI({ root, newsRoot, getContext, getApi, sheet, t
     return bg;
   };
   const buttons = label => `<div class="sg-actions"><button type="button" class="btn secondary" data-close>Cancel</button><button type="submit" class="btn">${label}</button></div>`;
-  const anonBox = text => `<label class="sg-check"><input type="checkbox" name="anon"><span><b>Post anonymously</b><br><small class="sg-muted">${text}</small></span></label>`;
+  const anonBox = text => `<label class="sg-check"><input type="checkbox" name="anon"><span><b>Post anonymously</b><br><small class="sg-muted">${text} You'll appear as a Bible name like “Ruth” or “Barnabas”.</small></span></label>`;
   function eventForm(id) {
     const e = events.find(x => x.id === id);
     const start = e?.startAt || (() => { const d = new Date(); d.setDate(d.getDate() + ((5 - d.getDay() + 7) % 7 || 7)); d.setHours(19, 30, 0, 0); return d.getTime(); })();
@@ -232,10 +265,11 @@ export function createCommunityUI({ root, newsRoot, getContext, getApi, sheet, t
       validateEvent(data); await getApi().saveEvent(id || null, data); toast(e ? 'Event updated' : 'Event posted'); });
   }
   function devotionForm() {
-    form(`<h2>Today's devotion 📖</h2>
-      <label>Bible passage<input name="ref" maxlength="100" placeholder="e.g. Psalm 23:1–3"></label>
+    form(`<h2>Today's devotion 📖</h2><p class="sg-muted">Share a verse, what moved you today, or what God is teaching you.</p>
+      <label>Bible passage (optional)<input name="ref" maxlength="100" placeholder="e.g. Psalm 23:1–3"></label>
       <label>Verse (optional)<textarea name="verse" maxlength="1500" rows="3" placeholder="Type or paste the verse"></textarea></label>
-      <label>What God showed me<textarea name="body" maxlength="3000" required placeholder="Your reflection, a lesson, a prayer…"></textarea></label>
+      <label>What moved me today<textarea name="body" maxlength="3000" required placeholder="A thought, something that touched your heart, a lesson, a prayer…"></textarea></label>
+      <p class="sg-muted"><a href="${YOUVERSION.verseOfDay}" target="_blank" rel="noopener">Need a verse? See today's Verse of the Day on YouVersion ↗</a></p>
       ${anonBox('Your name won’t be shown to anyone')}${buttons('Share')}`,
     async f => { const d = { ref: String(f.get('ref') || '').trim(), verse: String(f.get('verse') || '').trim(), body: String(f.get('body') || '').trim(), anon: f.get('anon') === 'on' };
       validateDevotion(d); await getApi().addDevotion(d); page = 'devotion'; render(); toast('Shared. Thank you!'); });
@@ -255,8 +289,8 @@ export function createCommunityUI({ root, newsRoot, getContext, getApi, sheet, t
   function answerForm(id) {
     const p = prayers.find(x => x.id === id); if (!p) return;
     const was = p.status === 'answered';
-    form(`<h2>${was ? 'Testimony' : 'Answered prayer 🎉'}</h2><p class="sg-muted">${esc(p.title)}</p>
-      <label>Share how God answered (optional)<textarea name="t" maxlength="500" placeholder="A short testimony for your group">${esc(p.testimony)}</textarea></label>${buttons(was ? 'Save' : 'Mark as answered')}`,
+    form(`<h2>Answered prayer 🎉</h2><p class="sg-muted">${esc(p.title)}</p>
+      <label>How did God answer? (optional)<textarea name="t" maxlength="500" placeholder="A short note for your group">${esc(p.testimony)}</textarea></label>${buttons(was ? 'Save' : 'Mark as answered')}`,
     async f => { await getApi().answerPrayer(p, String(f.get('t') || '').trim().slice(0, 500)); if (!was) { prayerFilter = 'answered'; render(); } toast(was ? 'Saved' : 'Praise God! Marked as answered'); });
   }
   async function pray(id) {
@@ -280,9 +314,10 @@ export function createCommunityUI({ root, newsRoot, getContext, getApi, sheet, t
       if (a === 'tab') { page = b.dataset.k; render(); changed?.('tab:' + page); }
       else if (a === 'newDevotion') devotionForm();
       else if (a === 'like') like(id);
-      else if (a === 'comments') { openComments.has(id) ? openComments.delete(id) : openComments.add(id); render(); root.querySelector(`[data-cform="${CSS.escape(id)}"] textarea`)?.focus(); }
+      else if (a === 'comments') { openComments.has(id) ? openComments.delete(id) : openComments.add(id); render(); root.querySelector(`[data-cform="dev:${CSS.escape(id)}"] textarea`)?.focus(); }
       else if (a === 'delDevotion') { if (await confirm('Delete this devotion?', 'Delete', true)) { await getApi().deleteDevotion(id); toast('Deleted'); } }
-      else if (a === 'delComment') { if (await confirm('Delete this comment?', 'Delete', true)) { await getApi().deleteComment(id); toast('Deleted'); } }
+      else if (a === 'delComment') { if (await confirm('Delete this comment?', 'Delete', true)) { b.dataset.kind === 'prayer' ? await getApi().deletePrayerComment(b.dataset.parent, id) : await getApi().deleteComment(id); toast('Deleted'); } }
+      else if (a === 'pcomments') { openPrayerComments.has(id) ? openPrayerComments.delete(id) : openPrayerComments.add(id); render(); root.querySelector(`[data-cform="prayer:${CSS.escape(id)}"] textarea`)?.focus(); }
       else if (a === 'newPrayer') prayerForm();
       else if (a === 'pray') pray(id);
       else if (a === 'answer') answerForm(id);
@@ -296,7 +331,8 @@ export function createCommunityUI({ root, newsRoot, getContext, getApi, sheet, t
     const ta = f.querySelector('textarea'), text = ta.value.trim(), anon = f.querySelector('[name=anon]').checked, btn = f.querySelector('[type=submit]');
     if (!text) return;
     btn.disabled = true;
-    try { validateComment(text); await getApi().addComment(f.dataset.cform, text, anon); ta.value = ''; ta.blur(); }
+    const [kind, parent] = [f.dataset.cform.slice(0, f.dataset.cform.indexOf(':')), f.dataset.cform.slice(f.dataset.cform.indexOf(':') + 1)];
+    try { validateComment(text); kind === 'prayer' ? await getApi().addPrayerComment(parent, text, anon) : await getApi().addComment(parent, text, anon); ta.value = ''; ta.blur(); }
     catch (err) { toast(errMsg(err)); }
     btn.disabled = false;
   });

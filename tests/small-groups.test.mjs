@@ -37,3 +37,21 @@ test('devotions are grouped as Today / Yesterday / date', () => {
   assert.equal(dayLabel(now - 864e5, now), 'Yesterday');
   assert.match(dayLabel(now - 3 * 864e5, now), /October 4|Oct 4/);
 });
+import { bibleName, youVersionUrl, BIBLE_NAMES } from '../site/small-groups.js';
+test('anonymous posts get a stable Bible name from the post id', () => {
+  assert.equal(bibleName('abc'), bibleName('abc'));
+  assert.ok(BIBLE_NAMES.includes(bibleName('anything')));
+  const names = new Set(Array.from({ length: 40 }, (_, i) => bibleName('post' + i)));
+  assert.ok(names.size > 10, 'names should vary between posts');
+  const avoid = BIBLE_NAMES.filter(n => n !== 'Ruth');
+  assert.equal(bibleName('anything', avoid), 'Ruth');                      // skips real members' names
+  assert.equal(bibleName('x', BIBLE_NAMES), 'Friend');
+});
+test('Bible references link to the YouVersion passage', () => {
+  assert.equal(youVersionUrl('John 3:16'), 'https://www.bible.com/bible/111/JHN.3.16');
+  assert.equal(youVersionUrl('1 John 4:8'), 'https://www.bible.com/bible/111/1JN.4.8');
+  assert.equal(youVersionUrl('Psalm 23:1–3'), 'https://www.bible.com/bible/111/PSA.23.1-3');
+  assert.equal(youVersionUrl('1Cor 13'), 'https://www.bible.com/bible/111/1CO.13');
+  assert.equal(youVersionUrl('Song of Songs 2:1'), 'https://www.bible.com/bible/111/SNG.2.1');
+  assert.match(youVersionUrl('not a verse'), /bible\.com\/search\/bible\?query=not%20a%20verse/);
+});

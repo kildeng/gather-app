@@ -194,3 +194,29 @@ test('comments: members comment (signed or anonymous) on existing devotions; onl
   await assertSucceeds(deleteDoc(doc(db('member'), cm('c2'))));                                              // anonymous author
   await assertSucceeds(deleteDoc(doc(db('leader'), cm('c1'))));                                              // moderation
 });
+test('prayer comments: visible exactly to those who can see the prayer; anonymous comments hide the author', async () => {
+  const pc = (p, id) => `churches/${cid}/prayers/${p}/comments/${id}`;
+  const cm = (uid, patch = {}) => ({ uid, anon: false, ...box, createdAt: serverTimestamp(), ...patch });
+  await env.withSecurityRulesDisabled(async ctx => {
+    const f = ctx.firestore();
+    await setDoc(doc(f, pr('cOpen')), { uid: 'member', anon: false, privacy: 'group', status: 'active', prayedCount: 0, ...box, createdAt: Timestamp.now(), answeredAt: null });
+    await setDoc(doc(f, pr('cPriv')), { uid: 'member', anon: false, privacy: 'leaders', status: 'active', prayedCount: 0, ...box, createdAt: Timestamp.now(), answeredAt: null });
+  });
+  await assertSucceeds(setDoc(doc(db('member2'), pc('cOpen', 'k1')), cm('member2')));
+  { const f = db('member2'), b = writeBatch(f); b.set(doc(f, pc('cOpen', 'k2')), cm(null, { anon: true })); b.set(doc(f, own('k2')), { uid: 'member2', kind: 'prayerComment', parent: 'cOpen' }); await assertSucceeds(b.commit()); }
+  const got = await getDoc(doc(db('leader'), pc('cOpen', 'k2')));
+  if (got.data().uid !== null) throw new Error('author leaked');
+  await assertSucceeds(getDocs(collection(db('member'), `churches/${cid}/prayers/cOpen/comments`)));
+  await assertFails(getDocs(collection(db('otherLeader'), `churches/${cid}/prayers/cOpen/comments`)));
+  // leaders-only prayer: the author and leaders can comment and read; other members can't
+  await assertSucceeds(setDoc(doc(db('leader'), pc('cPriv', 'k3')), cm('leader')));
+  await assertSucceeds(getDocs(collection(db('member'), `churches/${cid}/prayers/cPriv/comments`)));
+  await assertFails(getDocs(collection(db('member2'), `churches/${cid}/prayers/cPriv/comments`)));
+  await assertFails(setDoc(doc(db('member2'), pc('cPriv', 'k4')), cm('member2')));
+  // forging and claiming
+  await assertFails(setDoc(doc(db('member'), pc('cOpen', 'k5')), cm('member2')));
+  await assertFails(setDoc(doc(db('member'), own('k1')), { uid: 'member', kind: 'prayerComment', parent: 'cOpen' }));    // someone else's existing comment
+  await assertFails(deleteDoc(doc(db('member'), pc('cOpen', 'k2'))));
+  await assertSucceeds(deleteDoc(doc(db('member2'), pc('cOpen', 'k2'))));                                             // anonymous author
+  await assertSucceeds(deleteDoc(doc(db('leader'), pc('cOpen', 'k1'))));                                              // moderation
+});

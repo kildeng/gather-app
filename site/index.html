@@ -143,15 +143,15 @@ main{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;min-height:0}
 
 /* chat list */
 .rooms{display:flex;flex-direction:column;background:var(--card);border:1px solid var(--line);border-radius:16px;overflow:hidden}
-.room-row{display:flex;gap:12px;align-items:center;padding:12px 14px;text-align:left;width:100%;border-bottom:1px solid var(--line)}
+.room-row{display:flex;gap:14px;align-items:center;padding:16px 16px;min-height:84px;text-align:left;width:100%;border-bottom:1px solid var(--line)}
 .room-row:last-child{border-bottom:0}
-.room-row .avatar,.room-row .brandmark{width:46px;height:46px;font-size:15px}
-.room-row .brandmark{border-radius:12px;font-size:12px}
+.room-row .avatar,.room-row .brandmark{width:58px;height:58px;font-size:18px;flex-shrink:0}
+.room-row .brandmark{border-radius:14px;font-size:14px}
 .room-row .mid{flex:1;min-width:0}
-.room-row .t{font-weight:700;display:flex;align-items:center;gap:6px;min-width:0}
+.room-row .t{font-weight:700;font-size:17px;display:flex;align-items:center;gap:6px;min-width:0}
 .room-row .t span.nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .room-row .t svg{width:14px;height:14px;color:var(--lock);flex-shrink:0}
-.room-row .p{font-size:14px;color:var(--ink-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.room-row .p{font-size:15px;margin-top:2px;color:var(--ink-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .room-row.unread .p{color:var(--ink);font-weight:600}
 .room-row .r{display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0}
 .room-row .when{font-size:12px;color:var(--ink-3);font-variant-numeric:tabular-nums}
@@ -758,8 +758,8 @@ async function firebaseApi(){
   // Group life: events (with RSVP), prayer requests, devotions + likes + comments — all text encrypted with the
   // group key like announcements. Anonymous posts carry no author; a private "owner" record (readable only by
   // its author) lets the author manage them.
-  let rawEvents = [], rawPrayers = [], rawMinePrayers = {}, rawDev = [], rawCom = [], evCb = null, prCb = null, dvCb = null, cmCb = null, myOwned = [];
-  const subsCom = [], minePrayerSubs = {};
+  let rawEvents = [], rawPrayers = [], rawMinePrayers = {}, rawDev = [], rawCom = [], evCb = null, prCb = null, dvCb = null, cmCb = null, pcCb = null, myOwned = [];
+  const subsCom = [], minePrayerSubs = {}, pcSubs = {}, rawPc = {};
   const comCol = n => col("churches", cid, n);
   const openBox = r => tryOpen(churchKey, r);
   async function emitEvents(){
@@ -771,6 +771,7 @@ async function firebaseApi(){
   async function emitPrayers(){
     if (!prCb) return;
     const all = new Map(); rawPrayers.flat().concat(Object.values(rawMinePrayers)).forEach(r => all.set(r.id, r));
+    followPrayerComments([...all.keys()]);
     const cb = prCb, list = await Promise.all([...all.values()].map(async r => { const p = await openBox(r);
       return { id: r.id, uid: r.uid, anon: !!r.anon, privacy: r.privacy, status: r.status, prayedCount: r.prayedCount || 0, createdAt: toMs(r.createdAt), answeredAt: r.answeredAt ? toMs(r.answeredAt) : 0,
         locked: !p, title: p?.title || "", request: p?.request || "", category: p?.category || "Other", testimony: p?.testimony || "" }; }));
@@ -788,7 +789,22 @@ async function firebaseApi(){
       return { id: r.id, did: r.did, uid: r.uid, anon: !!r.anon, createdAt: toMs(r.createdAt), locked: !p, text: p?.t || "" }; }));
     cb(list);
   }
-  function emitCommunity(){ emitEvents(); emitPrayers(); emitDevotions(); emitComments(); }
+  // comments under each prayer request I can see (the rules show them to exactly the same people)
+  function followPrayerComments(ids){
+    if (!pcCb) return;
+    const want = new Set(ids.slice(0, 60));
+    for (const id of Object.keys(pcSubs)) if (!want.has(id)){ pcSubs[id](); delete pcSubs[id]; delete rawPc[id]; }
+    for (const id of want) if (!pcSubs[id]) pcSubs[id] = F.onSnapshot(F.query(col("churches", cid, "prayers", id, "comments"), F.orderBy("createdAt", "desc"), F.limit(200)),
+      s => { rawPc[id] = s.docs.map(x => ({ id: x.id, pid: id, ...x.data() })); emitPrayerComments(); }, () => {});
+  }
+  async function emitPrayerComments(){
+    if (!pcCb) return;
+    const cb = pcCb, list = await Promise.all(Object.values(rawPc).flat().map(async r => { const p = await openBox(r);
+      return { id: r.id, pid: r.pid, uid: r.uid, anon: !!r.anon, createdAt: toMs(r.createdAt), locked: !p, text: p?.t || "" }; }));
+    cb(list);
+  }
+  const stopPrayerComments = () => { Object.values(pcSubs).forEach(u => u()); for (const k in pcSubs){ delete pcSubs[k]; delete rawPc[k]; } };
+  function emitCommunity(){ emitEvents(); emitPrayers(); emitDevotions(); emitComments(); emitPrayerComments(); }
   const needKey = () => { if (!churchKey) throw new Error("no-key"); };
   // a new post: signed (uid = me) or anonymous (uid = null, plus my private owner record) — written together
   async function post(collName, data, anon, kind){
@@ -876,7 +892,16 @@ async function firebaseApi(){
       const id = await post("devComments", { did, ...(await C.seal(churchKey, { t: text })), createdAt: ts() }, anon, "comment");
       notify("comment", id);
     },
-    async deleteComment(id){ await F.deleteDoc(d("churches", cid, "devComments", id)); F.deleteDoc(d("churches", cid, "owners", id)).catch(() => {}); }
+    async deleteComment(id){ await F.deleteDoc(d("churches", cid, "devComments", id)); F.deleteDoc(d("churches", cid, "owners", id)).catch(() => {}); },
+    watchPrayerComments(next){ pcCb = next; emitPrayers(); return () => { stopPrayerComments(); pcCb = null; }; },
+    async addPrayerComment(pid, text, anon){
+      validateComment(text); needKey();
+      const ref = F.doc(col("churches", cid, "prayers", pid, "comments")), b = F.writeBatch(db);
+      b.set(ref, { ...(await C.seal(churchKey, { t: text })), uid: anon ? null : user.uid, anon: !!anon, createdAt: ts() });
+      if (anon) b.set(d("churches", cid, "owners", ref.id), { uid: user.uid, kind: "prayerComment", parent: pid });
+      await b.commit();
+    },
+    async deletePrayerComment(pid, id){ await F.deleteDoc(d("churches", cid, "prayers", pid, "comments", id)); F.deleteDoc(d("churches", cid, "owners", id)).catch(() => {}); }
   };
   const sysMsg = async (key, s, w) => ({ uid: user.uid, ...(await C.seal(key, { t: "", f: null, s, w: w || null })), createdAt: ts() });
 
@@ -951,7 +976,7 @@ async function firebaseApi(){
       }, e => { console.warn(e); H?.me(null); }));
     },
     closeChurch(){ unsubAll(subsMe); unsubAll(subsIn); unsubAll(subsCom); Object.values(minePrayerSubs).forEach(u => u()); for (const k in minePrayerSubs) delete minePrayerSubs[k];
-      evCb = prCb = dvCb = cmCb = null; rawEvents = []; rawPrayers = []; rawMinePrayers = {}; rawDev = []; rawCom = []; myOwned = []; roomSub?.(); roomSub = null; cid = null; H = null; rawAnns = []; rawReports = []; mineRooms = []; mainRoom = null; members = {}; },
+      stopPrayerComments(); evCb = prCb = dvCb = cmCb = pcCb = null; rawEvents = []; rawPrayers = []; rawMinePrayers = {}; rawDev = []; rawCom = []; myOwned = []; roomSub?.(); roomSub = null; cid = null; H = null; rawAnns = []; rawReports = []; mineRooms = []; mainRoom = null; members = {}; },
     watchRoom(rid, cb){
       roomSub?.();
       roomSub = F.onSnapshot(F.query(col("churches", cid, "rooms", rid, "messages"), F.orderBy("createdAt", "desc"), F.limit(MSG_LIMIT)), async s => {
@@ -1130,7 +1155,7 @@ async function firebaseApi(){
       for (const dv of await all(...base, "devotions")) await wipe(await all(...base, "devotions", dv.id, "likes"));
       await wipe(await all(...base, "devotions"));
       await wipe(await all(...base, "devComments"));
-      for (const pr of await all(...base, "prayers")) await wipe(await all(...base, "prayers", pr.id, "responses"));
+      for (const pr of await all(...base, "prayers")){ await wipe(await all(...base, "prayers", pr.id, "responses")); await wipe(await all(...base, "prayers", pr.id, "comments")); }
       await wipe(await all(...base, "prayers"));
       await wipe(await all(...base, "reports"));
       await wipe(await all(...base, "contacts"));
@@ -1249,7 +1274,10 @@ function demoApi(){
     comments: [
       { id:"c1", did:"d1", uid:"u1", anon:false, text:"Needed this today 🙏", createdAt: now - 2*Hr },
       { id:"c2", did:"d2", uid:null, anon:true, text:"Praying for you!", createdAt: now - 4*Hr } ],
-    prayed: { p2: new Set(["u1"]) }, liked: { d1: new Set(["u1"]) }, owners: { p2: "u4", d2: "u1", c2: "u3" } };
+    prayerComments: [
+      { id:"q1", pid:"p2", uid:null, anon:true, text:"Praying for your family this week 🙏", createdAt: now - 20*60e3 },
+      { id:"q2", pid:"p1", uid:"me", anon:false, text:"You've got this, Hannah! Praying.", createdAt: now - 60*60e3 } ],
+    prayed: { p2: new Set(["u1"]) }, liked: { d1: new Set(["u1"]) }, owners: { p2: "u4", d2: "u1", c2: "u3", q1: "u2" } };
   const comCbs = {};
   const comEmit = () => {
     const on = cur === FG, lead = c()?.members[uid()]?.role === "leader";
@@ -1258,11 +1286,15 @@ function demoApi(){
     comCbs.pr?.(on ? com.prayers.filter(p => lead || p.privacy === "group" || p.uid === uid() || com.owners[p.id] === uid()).map(p => ({ ...p })) : []);
     comCbs.dv?.(on ? com.devotions.map(x => ({ ...x })) : []);
     comCbs.cm?.(on ? com.comments.map(x => ({ ...x })) : []);
+    const visible = new Set(com.prayers.filter(p => lead || p.privacy === "group" || p.uid === uid() || com.owners[p.id] === uid()).map(p => p.id));
+    comCbs.pc?.(on ? com.prayerComments.filter(x => visible.has(x.pid)).map(x => ({ ...x })) : []);
   };
   const watch = k => next => { comCbs[k] = next; setTimeout(comEmit, 0); return () => { comCbs[k] = null; }; };
   const newPost = (list, data, anon) => { const id = "x" + (++seq); list.push({ id, ...data, uid: anon ? null : uid(), anon: !!anon, createdAt: Date.now() }); if (anon) com.owners[id] = uid(); comEmit(); };
   const community = {
-    watchMine: watch("mine"), watchEvents: watch("ev"), watchDevotions: watch("dv"), watchComments: watch("cm"),
+    watchMine: watch("mine"), watchEvents: watch("ev"), watchDevotions: watch("dv"), watchComments: watch("cm"), watchPrayerComments: watch("pc"),
+    async addPrayerComment(pid, text, anon){ validateComment(text); newPost(com.prayerComments, { pid, text }, anon); },
+    async deletePrayerComment(pid, id){ com.prayerComments = com.prayerComments.filter(x => x.id !== id); comEmit(); },
     watchPrayers(lead, next){ comCbs.pr = next; setTimeout(comEmit, 0); return () => { comCbs.pr = null; }; },
     async saveEvent(id, e){ validateEvent(e); if (c()?.members[uid()]?.role !== "leader") throw Object.assign(new Error("Not allowed"), { code: "permission-denied" });
       if (id) Object.assign(com.events.find(x => x.id === id), e); else com.events.push({ id: "e" + (++seq), uid: uid(), rsvp: {}, ...e }); comEmit(); },

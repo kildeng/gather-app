@@ -82,15 +82,22 @@ service cloud.firestore {
       }
       function isAuthor(id) { return resource.data.uid == uid() || (resource.data.get('anon', false) == true && ownsNow(id)); }
       match /owners/{id} {
+        function made(path) { return !exists(path) && existsAfter(path); }
         allow get, list: if signedIn() && resource.data.uid == uid();
-        allow create: if isMember(cid) && request.resource.data.keys().hasOnly(['uid', 'kind']) && request.resource.data.uid == uid()
-          && (!('kind' in request.resource.data) || request.resource.data.kind in ['prayer', 'devotion', 'comment'])
-          && !exists(/databases/$(database)/documents/churches/$(cid)/prayers/$(id))
-          && !exists(/databases/$(database)/documents/churches/$(cid)/devotions/$(id))
-          && !exists(/databases/$(database)/documents/churches/$(cid)/devComments/$(id))
-          && (existsAfter(/databases/$(database)/documents/churches/$(cid)/prayers/$(id))
-            || existsAfter(/databases/$(database)/documents/churches/$(cid)/devotions/$(id))
-            || existsAfter(/databases/$(database)/documents/churches/$(cid)/devComments/$(id)));
+        allow create: if isMember(cid) && request.resource.data.keys().hasOnly(['uid', 'kind', 'parent']) && request.resource.data.uid == uid()
+          && (
+            // a comment on a prayer request lives under that prayer
+            (request.resource.data.get('kind', '') == 'prayerComment' && request.resource.data.parent is string
+              && made(/databases/$(database)/documents/churches/$(cid)/prayers/$(request.resource.data.parent)/comments/$(id)))
+            || (!('parent' in request.resource.data)
+              && request.resource.data.get('kind', 'prayer') in ['prayer', 'devotion', 'comment']
+              && !exists(/databases/$(database)/documents/churches/$(cid)/prayers/$(id))
+              && !exists(/databases/$(database)/documents/churches/$(cid)/devotions/$(id))
+              && !exists(/databases/$(database)/documents/churches/$(cid)/devComments/$(id))
+              && (existsAfter(/databases/$(database)/documents/churches/$(cid)/prayers/$(id))
+                || existsAfter(/databases/$(database)/documents/churches/$(cid)/devotions/$(id))
+                || existsAfter(/databases/$(database)/documents/churches/$(cid)/devComments/$(id))))
+          );
         allow delete: if signedIn() && resource.data.uid == uid();
       }
 
@@ -124,6 +131,17 @@ service cloud.firestore {
               && changed().hasOnly(['iv', 'ct']) && str(request.resource.data.ct, 1, 20000))
           );
         allow delete: if authorOrLeader();
+        // comments on a prayer request: visible to exactly the people who can see the request
+        match /comments/{id} {
+          allow read: if canSeePrayer(get(prayerPath()).data, pid);
+          allow create: if canSeePrayer(get(prayerPath()).data, pid)
+            && request.resource.data.keys().hasOnly(['uid', 'anon', 'iv', 'ct', 'createdAt'])
+            && authorship(id)
+            && request.resource.data.iv is string && str(request.resource.data.ct, 1, 5000)
+            && request.resource.data.createdAt == request.time;
+          allow update: if false;
+          allow delete: if isMember(cid) && (isLeader(cid) || isAuthor(id));
+        }
         // one record per person (document id = their uid): "I Prayed" can't be counted twice; who prayed stays private
         match /responses/{u} {
           allow get: if signedIn() && u == uid();
