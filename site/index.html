@@ -13,6 +13,7 @@
 <link rel="apple-touch-icon" id="touchIcon" href="icons/apple-touch-icon.png">
 <link rel="icon" type="image/png" href="icons/icon-192.png">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/pretendard@1.3.9/dist/web/static/pretendard.min.css">
+<link rel="stylesheet" href="small-groups.css">
 <style>
 :root{
   --ink:#1B1F3B; --ink-2:#4A4F6A; --ink-3:#8A8EA6;
@@ -370,6 +371,7 @@ body.in-room nav.tabs{display:none}
           </button>
         </form>
       </div>
+      <div id="vGroups" class="view hidden"></div>
       <div id="vManage" class="view hidden"></div>
       <div id="vMe" class="view hidden"></div>
     </main>
@@ -382,6 +384,10 @@ body.in-room nav.tabs{display:none}
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg>
         Chats<span class="dot hidden" id="dotChat"></span>
       </button>
+      <button data-tab="groups">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="7" r="3"/><path d="M3 21v-3a6 6 0 0 1 12 0v3M16 4a3 3 0 0 1 0 6M21 21v-3a6 6 0 0 0-4-5"/></svg>
+        Small Groups
+      </button>
       <button data-tab="manage" id="tabManage" class="hidden">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6l8-3z"/><path d="M9 12l2 2 4-4"/></svg>
         Manage<span class="dot hidden" id="dotManage"></span>
@@ -391,6 +397,7 @@ body.in-room nav.tabs{display:none}
 </div>
 
 <script type="module">
+import { createSmallGroupsApi, createDemoSmallGroupsApi, createSmallGroupsUI } from './small-groups.js';
 /* ============================================================
    1) Firebase config — paste the values from the operator setup guide.
       While apiKey is still "YOUR_API_KEY", the app runs in preview mode.
@@ -751,6 +758,7 @@ async function firebaseApi(){
   const sysMsg = async (key, s, w) => ({ uid: user.uid, ...(await C.seal(key, { t: "", f: null, s, w: w || null })), createdAt: ts() });
 
   return {
+    smallGroups: createSmallGroupsApi({ F, A, db, auth }),
     async login(){
       if (standalone) return A.signInWithRedirect(auth, provider);
       try { await A.signInWithPopup(auth, provider); }
@@ -1202,6 +1210,7 @@ function route(){
   renderHome();
 }
 function leaveChurch(){
+  smallGroups.reset();
   if (S.room) closeRoom(true);
   api?.closeChurch();
   Object.assign(S, { cid:null, church:null, me:null, members:{}, contacts:{}, anns:[], rooms:{}, msgs:[], reports:[], tab:"ann" });
@@ -1219,6 +1228,7 @@ function enterChurch(cid){
 const handlers = {
   me(m, gone){
     const prev = S.me?.role; S.me = m;
+    if (S.church) smallGroups.sync();
     if (!m){
       if (gone && S.cid){ api.forgetGroup(S.cid); delete S.groups[S.cid]; }
       if (!groupExitInProgress) toast(gone ? "This group no longer exists, or you're no longer in it." : "You're no longer in this group.");
@@ -1237,10 +1247,11 @@ const handlers = {
     S.church = c; applyTheme(c.theme);
     S.groups[c.id] = { ...(S.groups[c.id] || {}), name: c.theme.name, accent: c.theme.accent, logo: c.theme.logo, welcome: c.theme.welcome };
     renderHeader();
+    smallGroups.sync();
     if (!S.room && !(S.tab === "manage" && S.mtab === "look")) rerenderTab();
   },
   anns(list){ S.anns = list; if (S.tab === "ann" && !S.room) renderAnn(); badges(); },
-  members(map){ S.members = map; refreshChats(); if (!S.room && S.tab === "ann") renderAnn(); if (S.tab === "manage" && S.mtab !== "look" && !S.room) renderManage(); },
+  members(map){ S.members = map; if (S.tab === "groups") smallGroups.sync(); refreshChats(); if (!S.room && S.tab === "ann") renderAnn(); if (S.tab === "manage" && S.mtab !== "look" && !S.room) renderManage(); },
   contacts(map){ S.contacts = map; if (S.tab === "manage" && S.mtab === "people" && !S.room) renderManage(); },
   reports(list){ S.reports = list; if (S.tab === "manage" && S.mtab !== "look" && !S.room) renderManage(); badges(); },
   rooms(list){
@@ -1252,8 +1263,18 @@ const handlers = {
     if (pendingOpen && S.rooms[pendingOpen]){ const id = pendingOpen; pendingOpen = null; openRoom(id); }
   }
 };
+const smallGroupContext = () => ({ churchId: S.cid, church: S.church, user: S.user, membership: S.me, members: S.members });
+const demoSmallGroups = DEMO ? createDemoSmallGroupsApi(smallGroupContext) : null;
+const smallGroups = createSmallGroupsUI({ root: $("#vGroups"), getContext: smallGroupContext, getApi: () => api.smallGroups || demoSmallGroups, sheet, toast,
+  changed: () => { if (S.tab === "ann" && !S.room && S.cid) renderAnn(); }
+});
+function smallGroupHomeCard(){
+  const group = smallGroups.summary();
+  return `<button class="sg-card sg-home-card" data-act="smallGroups"><span>Your Small Group</span><strong>${esc(group?.name || "Find a place to belong")}</strong><span>${esc(group ? `${group.meetingDay || "Schedule to come"} ${group.meetingTime}` : "View your group and meet your community")}</span><span>View Group →</span></button>`;
+}
+document.addEventListener("click", e => { if (e.target.closest('[data-act="smallGroups"]')) setTab("groups"); });
 function refreshChats(){ if (S.room) renderRoomHeader(); else if (S.tab === "chats") renderChats(); badges(); }
-function rerenderTab(){ ({ ann: renderAnn, chats: renderChats, manage: renderManage, me: renderMe })[S.tab]?.(); }
+function rerenderTab(){ ({ ann: renderAnn, chats: renderChats, groups: () => smallGroups.sync(), manage: renderManage, me: renderMe })[S.tab]?.(); }
 
 /* ---------- sign in ---------- */
 function renderLogin(){
@@ -1343,7 +1364,7 @@ function setTab(t){
   S.tab = t;
   if (S.room) closeRoom(true);
   document.querySelectorAll("#tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === t));
-  ["Ann","Chats","Manage","Me"].forEach(k => $("#v"+k).classList.toggle("hidden", k.toLowerCase() !== t));
+  ["Ann","Chats","Groups","Manage","Me"].forEach(k => $("#v"+k).classList.toggle("hidden", k.toLowerCase() !== t));
   $("#vRoom").classList.add("hidden");
   $("#mainArea").style.overflowY = "auto";
   renderHeader();
@@ -1362,7 +1383,7 @@ function renderHeader(){
   $("#headBrand").innerHTML = !inR ? `<button class="gsw" data-act="switcher" aria-label="Switch group">${brandHTML(theme(), "sm")}<span class="car">▾</span></button>` : "";
   renderMeBtn();
   if (inR) return renderRoomHeader();
-  $("#viewTitle").textContent = { ann: theme()?.name || "Announcements", chats:"Chats", manage:"Manage", me:"My Profile" }[S.tab];
+  $("#viewTitle").textContent = { ann: theme()?.name || "Announcements", chats:"Chats", groups:"Small Groups", manage:"Manage", me:"My Profile" }[S.tab];
 }
 function badges(){
   const meId = S.user?.uid, seenAnn = store.get(`seenAnn:${S.cid}`, 0);
@@ -1385,6 +1406,7 @@ function renderAnn(){
   const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone;
   $("#vAnn").innerHTML =
     (!standalone && !DEMO && !store.get("hideTip", false) ? `<div class="install-tip"><span>📲</span><div><b>Install the app</b> so it opens full screen from your Home Screen.<br>${installEvt ? `<button class="link-btn" data-act="installNow" style="padding:4px 0;color:var(--accent);font-weight:700">Install now</button> · ` : `<a class="link-btn" href="download.html" style="padding:4px 0;color:var(--accent);font-weight:700">Show me how</a> · `}<button class="link-btn" data-act="hideTip" style="padding:4px 0">Not now</button></div></div>` : "") +
+    smallGroupHomeCard() +
     (isLeader() ? `<button class="compose-btn" data-act="newAnn">＋ New announcement</button>` : "") +
     (list.length ? list.map(a => `
       <article class="ann ${a.pinned ? "pinned" : ""} ${a.at > annSeenAtRender && a.uid !== S.user?.uid ? "new" : ""}">

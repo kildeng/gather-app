@@ -15,6 +15,18 @@ service cloud.firestore {
     function isLeader(cid) { return signedIn() && exists(memPath(cid)) && get(memPath(cid)).data.role == 'leader'; }
     function leaderAfter(cid) { return signedIn() && getAfter(memPath(cid)).data.role == 'leader'; }
 
+    // Staff roles are server-issued, church-scoped custom claims, never /users fields.
+    function smallGroupStaffRole(cid) {
+      return signedIn() ? request.auth.token.get('smallGroupRoles', {}).get(cid, '') : '';
+    }
+    function smallGroupAdmin(cid) {
+      return isMember(cid) && (smallGroupStaffRole(cid) == 'ADMIN'
+        || (isLeader(cid) && get(/databases/$(database)/documents/churches/$(cid)).data.createdBy == uid()));
+    }
+    function smallGroupStaff(cid) {
+      return isMember(cid) && (smallGroupAdmin(cid) || smallGroupStaffRole(cid) == 'PASTOR');
+    }
+
     // Personal account: list of my groups. Only me.
     match /users/{u} {
       allow read, create, update: if signedIn() && uid() == u;
@@ -43,6 +55,59 @@ service cloud.firestore {
       allow update: if isLeader(cid) && changed().hasOnly(['name', 'theme', 'invite'])
         && (!('theme' in request.resource.data) || request.resource.data.theme.logo.size() < 120000);
       allow delete: if isLeader(cid);                         // leaders can delete the whole group
+
+      // Phase 1: group metadata and a minimal directory, not private care content.
+      match /smallGroups/{gid} {
+        function groupPath() { return /databases/$(database)/documents/churches/$(cid)/smallGroups/$(gid); }
+        function canReadGroup() { return isMember(cid) && (smallGroupStaff(cid) || uid() in resource.data.memberIds); }
+        function assignedMember(u) {
+          return exists(/databases/$(database)/documents/churches/$(cid)/members/$(u))
+            && get(/databases/$(database)/documents/churches/$(cid)/members/$(u)).data.role in ['member', 'leader'];
+        }
+        function validGroup() {
+          let g = request.resource.data;
+          return g.keys().hasAll(['name', 'description', 'leaderId', 'memberIds', 'meetingDay', 'meetingTime', 'meetingLocation', 'imageUrl', 'status', 'createdAt', 'updatedAt'])
+            && g.keys().hasOnly(['name', 'description', 'leaderId', 'memberIds', 'meetingDay', 'meetingTime', 'meetingLocation', 'imageUrl', 'status', 'createdAt', 'updatedAt'])
+            && str(g.name, 1, 60) && str(g.description, 0, 500)
+            && str(g.leaderId, 1, 128) && assignedMember(g.leaderId)
+            && g.memberIds is list && g.memberIds.size() >= 1 && g.memberIds.size() <= 100
+            && g.memberIds.toSet().size() == g.memberIds.size() && g.leaderId in g.memberIds
+            && g.meetingDay in ['', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+            && (g.meetingTime == '' || (g.meetingTime is string && g.meetingTime.matches('([01][0-9]|2[0-3]):[0-5][0-9]')))
+            && str(g.meetingLocation, 0, 160)
+            && str(g.imageUrl, 0, 2048) && (g.imageUrl == '' || g.imageUrl.matches('https://.*'))
+            && g.status in ['active', 'archived'] && g.createdAt is timestamp
+            && g.updatedAt == request.time;
+        }
+        allow read: if canReadGroup();
+        allow create: if smallGroupAdmin(cid) && validGroup() && request.resource.data.createdAt == request.time;
+        allow update: if validGroup() && request.resource.data.createdAt == resource.data.createdAt
+          && (smallGroupAdmin(cid)
+            || (isMember(cid) && uid() == resource.data.leaderId && uid() in resource.data.memberIds
+              && changed().hasOnly(['name', 'description', 'meetingDay', 'meetingTime', 'meetingLocation', 'imageUrl', 'updatedAt'])));
+        allow delete: if false;
+
+        match /members/{u} {
+          function readDirectory() {
+            let g = get(groupPath()).data;
+            return isMember(cid) && (smallGroupStaff(cid) || uid() in g.memberIds);
+          }
+          allow read: if readDirectory();
+          // Admin assigns membership; the application verifies each selected church
+          // member in the transaction. Readers still require approved church access.
+          // Avoid per-profile document lookups that exceed batch rule access limits.
+          allow create, update: if smallGroupAdmin(cid)
+            && u in getAfter(groupPath()).data.memberIds
+            && request.resource.data.keys().hasAll(['firstName', 'photo', 'bio'])
+            && request.resource.data.keys().hasOnly(['firstName', 'photo', 'bio'])
+            && str(request.resource.data.firstName, 1, 30)
+            && str(request.resource.data.bio, 0, 160)
+            && str(request.resource.data.photo, 0, 2048)
+            && (request.resource.data.photo == '' || request.resource.data.photo.matches('https://.*'));
+          allow delete: if smallGroupAdmin(cid) && !(u in getAfter(groupPath()).data.memberIds);
+        }
+        // Future prayer/check-in collections intentionally have no access grants yet.
+      }
 
       match /members/{u} {
         allow get: if signedIn() && (uid() == u || isLeader(cid) || (isMember(cid) && resource.data.role in ['member', 'leader']));
