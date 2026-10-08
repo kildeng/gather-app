@@ -1,0 +1,12 @@
+.votd{background:linear-gradient(135deg,var(--card),color-mix(in srgb,var(--accent) 9%,var(--card)));border:1px solid var(--line);border-radius:20px;padding:20px;margin-bottom:16px}
+.votd.compact{padding:16px 18px}.votd-label{font-size:12px;font-weight:800;letter-spacing:.8px;text-transform:uppercase;color:var(--accent)}
+.votd-text{font-family:Georgia,"Times New Roman",serif;font-size:20px;line-height:1.5;margin:10px 0 8px;color:var(--ink)}.votd.compact .votd-text{font-size:17px}
+.votd-ref{font-weight:700;color:var(--ink-2)}.votd-ref small{font-weight:500;color:var(--ink-3)}
+.votd-actions{display:flex;gap:18px;margin-top:10px}.votd-actions .link-btn{padding:6px 0;color:var(--accent);font-weight:700;text-decoration:none}
+.bible-reader{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:16px;margin-bottom:16px}
+.bible-pick{display:grid;grid-template-columns:2fr 1fr;gap:8px;position:sticky;top:0;background:var(--card);padding-bottom:8px;z-index:1}
+.bible-pick select{min-height:46px;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:var(--bg);color:var(--ink);font:inherit;font-weight:700}
+.bible-text h2{font-family:Georgia,serif;font-size:24px;margin:10px 0}.bible-verses{font-family:Georgia,"Times New Roman",serif;font-size:18px;line-height:1.75;color:var(--ink)}
+.bible-verses sup{font-family:system-ui,sans-serif;font-size:11px;font-weight:800;color:var(--accent);margin:0 3px 0 6px}
+.bible-nav{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:14px 0 10px}.bible-nav .btn{min-height:46px;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bible-yv{display:flex;align-items:center;justify-content:center;min-height:48px;text-decoration:none;text-align:center;margin-bottom:8px}

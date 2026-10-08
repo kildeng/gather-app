@@ -55,3 +55,14 @@ test('Bible references link to the YouVersion passage', () => {
   assert.equal(youVersionUrl('Song of Songs 2:1'), 'https://www.bible.com/bible/111/SNG.2.1');
   assert.match(youVersionUrl('not a verse'), /bible\.com\/search\/bible\?query=not%20a%20verse/);
 });
+import { BIBLE_BOOKS, stepChapter, localDate } from '../site/bible.js';
+test('Bible reader: 66 books, 1189 chapters, and prev/next crosses book edges', () => {
+  assert.equal(BIBLE_BOOKS.length, 66);
+  assert.equal(BIBLE_BOOKS.reduce((n, b) => n + b[2], 0), 1189);
+  assert.deepEqual(stepChapter('GEN', 50, 1), ['EXO', 1]);
+  assert.deepEqual(stepChapter('EXO', 1, -1), ['GEN', 50]);
+  assert.deepEqual(stepChapter('PSA', 23, 1), ['PSA', 24]);
+  assert.equal(stepChapter('GEN', 1, -1), null);
+  assert.equal(stepChapter('REV', 22, 1), null);
+  assert.match(localDate(new Date(2026, 9, 8)), /^2026-10-08$/);
+});

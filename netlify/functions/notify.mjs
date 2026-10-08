@@ -59,12 +59,12 @@ export default async req => {
     let to = [], body = "", room = rid, tag = rid || "ann";
     if (kind === "test"){ to = [uid]; body = "Notifications are working ✅"; room = ""; tag = "test"; }
     else if (kind === "ann"){
-      if (me.role !== "leader") return json({ error: "leaders only" }, 403);
+      if (me.role !== "leader" && me.canPost !== true) return json({ error: "not allowed to post" }, 403);
       to = await approvedMembers(cid, token); body = `📣 New announcement from ${who}`; room = "";
     } else if (kind === "event"){
       // the event must exist, be the sender's, and be brand new (stops replaying old events as pings)
       const e = rid && await get(`churches/${cid}/events/${rid}`, token);
-      if (!e || e.uid !== uid || me.role !== "leader" || Date.now() - (e.createdAt || 0) > 120000) return json({ sent: 0, skipped: "not a new event" });
+      if (!e || e.uid !== uid || (me.role !== "leader" && me.canPost !== true) || Date.now() - (e.createdAt || 0) > 120000) return json({ sent: 0, skipped: "not a new event" });
       to = await approvedMembers(cid, token); body = `📅 ${who} posted a new event`; room = ""; tag = "events";
     } else if (kind === "prayer" || kind === "devotion" || kind === "comment"){
       const coll = { prayer: "prayers", devotion: "devotions", comment: "devComments" }[kind];

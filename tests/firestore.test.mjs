@@ -220,3 +220,26 @@ test('prayer comments: visible exactly to those who can see the prayer; anonymou
   await assertSucceeds(deleteDoc(doc(db('member2'), pc('cOpen', 'k2'))));                                             // anonymous author
   await assertSucceeds(deleteDoc(doc(db('leader'), pc('cOpen', 'k1'))));                                              // moderation
 });
+test('posting: leaders and members a leader allowed can post announcements and events; others cannot', async () => {
+  const ann = uid => ({ uid, pinned: false, ...box, createdAt: serverTimestamp() });
+  const an = id => `churches/${cid}/announcements/${id}`;
+  await assertSucceeds(setDoc(doc(db('leader'), an('a1')), ann('leader')));
+  await assertFails(setDoc(doc(db('member'), an('a2')), ann('member')));
+  await assertFails(setDoc(doc(db('member'), ev('m1')), newEvent('member')));
+  // a member can't give themselves permission; a leader can
+  await assertFails(updateDoc(doc(db('member'), `churches/${cid}/members/member`), { canPost: true }));
+  await assertFails(updateDoc(doc(db('member2'), `churches/${cid}/members/member`), { canPost: true }));
+  await assertFails(updateDoc(doc(db('leader'), `churches/${cid}/members/member`), { canPost: 'yes' }));
+  await assertSucceeds(updateDoc(doc(db('leader'), `churches/${cid}/members/member`), { canPost: true }));
+  await assertSucceeds(setDoc(doc(db('member'), an('a3')), ann('member')));
+  await assertSucceeds(setDoc(doc(db('member'), ev('m2')), newEvent('member')));
+  await assertSucceeds(updateDoc(doc(db('member'), ev('m2')), { ...box, startAt: Timestamp.fromMillis(Date.now() + 3 * 864e5), updatedAt: serverTimestamp() }));
+  await assertFails(updateDoc(doc(db('member'), ev('e1')), { ...box, updatedAt: serverTimestamp() }));   // someone else's event
+  await assertFails(deleteDoc(doc(db('member'), an('a1'))));                                              // the leader's announcement
+  await assertSucceeds(deleteDoc(doc(db('member'), an('a3'))));                                           // their own
+  // permission taken away
+  await assertSucceeds(updateDoc(doc(db('leader'), `churches/${cid}/members/member`), { canPost: false }));
+  await assertFails(setDoc(doc(db('member'), an('a4')), ann('member')));
+  await assertFails(deleteDoc(doc(db('member'), ev('m2'))));
+  await assertSucceeds(deleteDoc(doc(db('leader'), ev('m2'))));
+});

@@ -13,6 +13,8 @@ service cloud.firestore {
     function memPath(cid) { return /databases/$(database)/documents/churches/$(cid)/members/$(request.auth.uid); }
     function isMember(cid) { return signedIn() && exists(memPath(cid)) && get(memPath(cid)).data.role in ['member', 'leader']; }
     function isLeader(cid) { return signedIn() && exists(memPath(cid)) && get(memPath(cid)).data.role == 'leader'; }
+    // posting announcements & events: leaders (admins, incl. the group's owner) and anyone a leader has given permission
+    function canPost(cid) { return isMember(cid) && (get(memPath(cid)).data.role == 'leader' || get(memPath(cid)).data.get('canPost', false) == true); }
     function leaderAfter(cid) { return signedIn() && getAfter(memPath(cid)).data.role == 'leader'; }
 
     // Personal account: list of my groups. Only me.
@@ -49,7 +51,7 @@ service cloud.firestore {
       // the event time, RSVP answers, privacy and status.
       match /events/{eid} {
         allow read: if isMember(cid);
-        allow create: if isLeader(cid)
+        allow create: if canPost(cid)
           && request.resource.data.keys().hasOnly(['uid', 'startAt', 'iv', 'ct', 'rsvp', 'createdAt', 'updatedAt'])
           && request.resource.data.uid == uid()
           && request.resource.data.startAt is timestamp
@@ -57,15 +59,15 @@ service cloud.firestore {
           && request.resource.data.rsvp == {}
           && request.resource.data.createdAt == request.time && request.resource.data.updatedAt == request.time;
         allow update: if
-          // leaders edit the event
-          (isLeader(cid) && changed().hasOnly(['startAt', 'iv', 'ct', 'updatedAt'])
+          // leaders, or the person who posted it (if they can still post), edit the event
+          ((isLeader(cid) || (canPost(cid) && resource.data.uid == uid())) && changed().hasOnly(['startAt', 'iv', 'ct', 'updatedAt'])
             && request.resource.data.startAt is timestamp && str(request.resource.data.ct, 1, 20000)
             && request.resource.data.updatedAt == request.time)
           // anyone in the group answers for themselves only: Going / Maybe / Can't go (or clears it)
           || (isMember(cid) && changed().hasOnly(['rsvp'])
             && request.resource.data.rsvp.diff(resource.data.rsvp).affectedKeys().hasOnly([uid()])
             && (!(uid() in request.resource.data.rsvp) || request.resource.data.rsvp[uid()] in ['going', 'maybe', 'no']));
-        allow delete: if isLeader(cid);
+        allow delete: if isLeader(cid) || (canPost(cid) && resource.data.uid == uid());
       }
 
       // Anonymous posts: the post itself carries no author (uid is null), so other members — leaders
@@ -226,9 +228,10 @@ service cloud.firestore {
             && request.resource.data.devs is map && request.resource.data.devs.size() <= 10)
           // any approved member can hand the group key to another member's new device
           || (isMember(cid) && changed().hasOnly(['ck']) && request.resource.data.ck is map)
-          // leaders: approve / remove / make leader, and hand out the group key
-          || (isLeader(cid) && changed().hasOnly(['role', 'ck'])
-            && request.resource.data.role in ['pending', 'member', 'leader', 'removed']);
+          // leaders: approve / remove / make leader, give or take away posting permission, and hand out the group key
+          || (isLeader(cid) && changed().hasOnly(['role', 'ck', 'canPost'])
+            && request.resource.data.role in ['pending', 'member', 'leader', 'removed']
+            && request.resource.data.get('canPost', false) is bool);
         // leave the group yourself; leaders remove everyone when deleting the group
         allow delete: if signedIn() && (uid() == u || isLeader(cid));
       }
@@ -244,13 +247,13 @@ service cloud.firestore {
 
       match /announcements/{id} {
         allow read: if isMember(cid);
-        allow create: if isLeader(cid)
+        allow create: if canPost(cid)
           && request.resource.data.keys().hasOnly(['uid', 'pinned', 'iv', 'ct', 'createdAt'])
           && request.resource.data.uid == uid()
           && request.resource.data.pinned is bool
           && str(request.resource.data.ct, 1, 20000)
           && request.resource.data.createdAt == request.time;
-        allow delete: if isLeader(cid);
+        allow delete: if isLeader(cid) || (canPost(cid) && resource.data.uid == uid());
       }
 
       // Reports go to leaders only, encrypted to each leader's key

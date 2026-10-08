@@ -14,6 +14,7 @@
 <link rel="icon" type="image/png" href="icons/icon-192.png">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/pretendard@1.3.9/dist/web/static/pretendard.min.css">
 <link rel="stylesheet" href="small-groups.css">
+<link rel="stylesheet" href="bible.css">
 <style>
 :root{
   --ink:#1B1F3B; --ink-2:#4A4F6A; --ink-3:#8A8EA6;
@@ -372,6 +373,7 @@ body.in-room nav.tabs{display:none}
         </form>
       </div>
       <div id="vGroups" class="view hidden"></div>
+      <div id="vBible" class="view hidden"></div>
       <div id="vManage" class="view hidden"></div>
       <div id="vMe" class="view hidden"></div>
     </main>
@@ -388,6 +390,10 @@ body.in-room nav.tabs{display:none}
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="7" r="3"/><path d="M3 21v-3a6 6 0 0 1 12 0v3M16 4a3 3 0 0 1 0 6M21 21v-3a6 6 0 0 0-4-5"/></svg>
         Small Group
       </button>
+      <button data-tab="bible">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4.5A2.5 2.5 0 0 1 7.5 2H19v17H7.5A2.5 2.5 0 0 0 5 21.5z"/><path d="M5 21.5V4.5M12 6v6M9 9h6"/></svg>
+        Bible
+      </button>
       <button data-tab="manage" id="tabManage" class="hidden">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6l8-3z"/><path d="M9 12l2 2 4-4"/></svg>
         Manage<span class="dot hidden" id="dotManage"></span>
@@ -397,6 +403,7 @@ body.in-room nav.tabs{display:none}
 </div>
 
 <script type="module">
+import { createBible } from './bible.js';
 import { createCommunityUI, prayerQueries, validateEvent, validatePrayer, validateDevotion, validateComment } from './small-groups.js';
 /* ============================================================
    1) Firebase config — paste the values from the operator setup guide.
@@ -727,7 +734,7 @@ async function firebaseApi(){
     const memQ = myRole === "leader" ? col(...base, "members") : F.query(col(...base, "members"), F.where("role", "in", ["member", "leader"]));
     subsIn.push(F.onSnapshot(memQ, s => {
       members = Object.fromEntries(s.docs.map(x => [x.id, x.data()]));
-      H?.members(Object.fromEntries(s.docs.map(x => { const m = x.data(); return [x.id, { name: m.name, photo: m.photo || "", role: m.role, at: toMs(m.joinedAt) }]; })));
+      H?.members(Object.fromEntries(s.docs.map(x => { const m = x.data(); return [x.id, { name: m.name, photo: m.photo || "", role: m.role, canPost: m.canPost === true, at: toMs(m.joinedAt) }]; })));
       heal();
     }));
     subsIn.push(F.onSnapshot(F.query(col(...base, "rooms"), F.where("members", "array-contains", user.uid)), s => { mineRooms = s.docs.map(x => ({ id: x.id, ...x.data() })); emitRooms(); }));
@@ -972,7 +979,7 @@ async function firebaseApi(){
         myRole = role;
         if (changed){ unsubAll(subsIn); if (role === "member" || role === "leader") attachInside(); }
         const closed = m?.role === "removed" && m.ck?._deleted === true;   // the group was deleted by a leader
-        H?.me(m && !closed ? { name: m.name, photo: m.photo || "", role: m.role } : null, !m || closed);
+        H?.me(m && !closed ? { name: m.name, photo: m.photo || "", role: m.role, canPost: m.role === "leader" || m.canPost === true } : null, !m || closed);
       }, e => { console.warn(e); H?.me(null); }));
     },
     closeChurch(){ unsubAll(subsMe); unsubAll(subsIn); unsubAll(subsCom); Object.values(minePrayerSubs).forEach(u => u()); for (const k in minePrayerSubs) delete minePrayerSubs[k];
@@ -1102,7 +1109,8 @@ async function firebaseApi(){
       }
       await F.deleteDoc(d("churches", cid, "rooms", rid));
     },
-    setRole: (uid, role) => F.updateDoc(d("churches", cid, "members", uid), { role }),
+    setRole: (uid, role) => F.updateDoc(d("churches", cid, "members", uid), role === "removed" || role === "leader" ? { role, canPost: false } : { role }),
+    setCanPost: (uid, on) => F.updateDoc(d("churches", cid, "members", uid), { canPost: !!on }),
     setName: name => F.updateDoc(d("churches", cid, "members", user.uid), { name }),
     async saveTheme(theme, invite){
       const b = F.writeBatch(db);
@@ -1238,11 +1246,11 @@ function demoApi(){
   const push = () => {
     if (!H || !c()) return;
     const k = c(), role = myRole();
-    H.me(k.members[uid()] ? { name: users[uid()].name, photo:"", role, fp:"a41c09e7d2b85f3e61d0" } : null);
+    H.me(k.members[uid()] ? { name: users[uid()].name, photo:"", role, canPost: role === "leader" || !!k.members[uid()].canPost } : null);
     if (!["member","leader"].includes(role)) return;
     H.church({ id: k.id, name: k.name, createdBy: k.createdBy, invite: k.invite, theme: { ...k.theme } });
     H.anns(k.anns.map(a => ({ ...a })));
-    H.members(Object.fromEntries(Object.entries(k.members).filter(([, v]) => role === "leader" || ["member","leader"].includes(v.role)).map(([id, v]) => [id, { name: users[id].name, photo:"", role: v.role, at: v.at }])));
+    H.members(Object.fromEntries(Object.entries(k.members).filter(([, v]) => role === "leader" || ["member","leader"].includes(v.role)).map(([id, v]) => [id, { name: users[id].name, photo:"", role: v.role, canPost: !!v.canPost, at: v.at }])));
     H.rooms(Object.values(k.rooms).filter(r => r.type === "main" || r.members.includes(uid())).map(r => ({ ...r, members:[...r.members], reads: { ...(r.reads || {}) } })));
     if (role === "leader"){ H.contacts(Object.fromEntries(Object.keys(k.members).map(id => [id, users[id].email]))); H.reports(k.reports.map(r => ({ ...r }))); }
   };
@@ -1351,6 +1359,7 @@ function demoApi(){
     async leaveGroup(rid){ c().msgs[rid].push({ id:"m"+(++seq), uid: uid(), at: Date.now(), text:"", file:null, sys:"left" }); c().rooms[rid].members = c().rooms[rid].members.filter(u => u !== uid()); push(); },
     async deleteGroup(rid){ delete c().rooms[rid]; delete c().msgs[rid]; push(); },
     async setRole(id, r){ c().members[id].role = r; push(); },
+    async setCanPost(id, on){ c().members[id].canPost = !!on; push(); },
     async setName(n){ users[uid()].name = n; push(); },
     async saveTheme(theme){ c().theme = { ...theme }; c().name = theme.name; push(); },
     async newInvite(theme, old){ const code = inviteCode(); delete invites[old]; invites[code] = cur; c().invite = code; push(); return code; },
@@ -1497,7 +1506,9 @@ function smallGroupHomeCard(){
 }
 document.addEventListener("click", e => { if (e.target.closest('[data-act="smallGroups"]')) setTab("groups"); });
 function refreshChats(){ if (S.room) renderRoomHeader(); else if (S.tab === "chats") renderChats(); badges(); }
-function rerenderTab(){ ({ ann: renderAnn, chats: renderChats, groups: () => smallGroups.sync(), manage: renderManage, me: renderMe })[S.tab]?.(); }
+function rerenderTab(){ ({ ann: renderAnn, chats: renderChats, groups: () => smallGroups.sync(), bible: () => bible.render(), manage: renderManage, me: renderMe })[S.tab]?.(); }
+const bible = createBible({ root: $("#vBible"), demo: DEMO, store, toast, onVotd: () => { if (S.tab === "ann" && !S.room && S.cid) renderAnn(); } });
+document.addEventListener("click", e => { if (e.target.closest('[data-bible="open"]')) setTab("bible"); });
 
 /* ---------- sign in ---------- */
 function renderLogin(){
@@ -1587,7 +1598,7 @@ function setTab(t){
   S.tab = t;
   if (S.room) closeRoom(true);
   document.querySelectorAll("#tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === t));
-  ["Ann","Chats","Groups","Manage","Me"].forEach(k => $("#v"+k).classList.toggle("hidden", k.toLowerCase() !== t));
+  ["Ann","Chats","Groups","Bible","Manage","Me"].forEach(k => $("#v"+k).classList.toggle("hidden", k.toLowerCase() !== t));
   $("#vRoom").classList.add("hidden");
   $("#mainArea").style.overflowY = "auto";
   renderHeader();
@@ -1606,7 +1617,7 @@ function renderHeader(){
   $("#headBrand").innerHTML = !inR ? `<button class="gsw" data-act="switcher" aria-label="Switch group">${brandHTML(theme(), "sm")}<span class="car">▾</span></button>` : "";
   renderMeBtn();
   if (inR) return renderRoomHeader();
-  $("#viewTitle").textContent = { ann: theme()?.name || "Announcements", chats:"Chats", groups:"Small Group", manage:"Manage", me:"My Profile" }[S.tab];
+  $("#viewTitle").textContent = { ann: theme()?.name || "Announcements", chats:"Chats", groups:"Small Group", bible:"Bible", manage:"Manage", me:"My Profile" }[S.tab];
 }
 function badges(){
   const meId = S.user?.uid, seenAnn = store.get(`seenAnn:${S.cid}`, 0);
@@ -1629,7 +1640,8 @@ function renderAnn(){
   const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone;
   $("#vAnn").innerHTML =
     (!standalone && !DEMO && !store.get("hideTip", false) ? `<div class="install-tip"><span>📲</span><div><b>Install the app</b> so it opens full screen from your Home Screen.<br>${installEvt ? `<button class="link-btn" data-act="installNow" style="padding:4px 0;color:var(--accent);font-weight:700">Install now</button> · ` : `<a class="link-btn" href="download.html" style="padding:4px 0;color:var(--accent);font-weight:700">Show me how</a> · `}<button class="link-btn" data-act="hideTip" style="padding:4px 0">Not now</button></div></div>` : "") +
-    (isLeader() ? `<div class="compose-row"><button class="compose-btn" data-act="newAnn">＋ New announcement</button><button class="compose-btn" data-ev="new">＋ New event</button></div>` : "") +
+    bible.votdCard(true) +
+    (S.me?.canPost ? `<div class="compose-row"><button class="compose-btn" data-act="newAnn">＋ New announcement</button><button class="compose-btn" data-ev="new">＋ New event</button></div>` : "") +
     smallGroups.eventsHTML() +
     smallGroupHomeCard() +
     (list.length ? `<div class="sec-title">Announcements</div>` : "") +
@@ -1637,7 +1649,7 @@ function renderAnn(){
       <article class="ann ${a.pinned ? "pinned" : ""} ${a.at > annSeenAtRender && a.uid !== S.user?.uid ? "new" : ""}">
         ${a.locked ? `<div class="locked">🔒 Waiting for access. A leader's app shares the key the next time it opens.</div>` : `<h3>${a.pinned ? "📌 " : ""}${esc(a.title)}</h3>${a.body ? `<div class="body">${esc(a.body)}</div>` : ""}`}
         <div class="meta"><span>${esc(nameOf(a.uid))} · ${fmtWhen(a.at)}</span>
-          ${isLeader() ? `<button class="link-btn danger" data-act="delAnn" data-id="${esc(a.id)}">Delete</button>` : ""}</div>
+          ${isLeader() || (S.me?.canPost && a.uid === S.user?.uid) ? `<button class="link-btn danger" data-act="delAnn" data-id="${esc(a.id)}">Delete</button>` : ""}</div>
       </article>`).join("") : `<div class="empty">No announcements yet</div>`);
 }
 
@@ -1705,7 +1717,7 @@ function openRoom(id, fromHistory = false){
   if (!S.rooms[id]) return;
   if (S.room) roomUnsub?.();
   S.room = id; S.msgs = [];
-  ["Ann","Chats","Manage","Me"].forEach(k => $("#v"+k).classList.add("hidden"));
+  ["Ann","Chats","Groups","Bible","Manage","Me"].forEach(k => $("#v"+k).classList.add("hidden"));
   $("#vRoom").classList.remove("hidden");
   $("#mainArea").style.overflowY = "hidden";
   $("#msgList").innerHTML = "";
@@ -1838,7 +1850,8 @@ function managePeople(){
     `<div class="sec-title">Leaders · ${leaders.length}</div>` +
     leaders.map(u => row(u, u.id === S.user.uid ? `<span class="chip">You</span>` : `<button class="pill ghost" data-act="role" data-id="${esc(u.id)}" data-role="member">Make member</button>`)).join("") +
     `<div class="sec-title">Members · ${mem.length}</div>` +
-    (mem.length ? mem.map(u => row(u, `<button class="pill ghost" data-act="role" data-id="${esc(u.id)}" data-role="leader">Make leader</button><button class="pill no" data-act="role" data-id="${esc(u.id)}" data-role="removed">Remove</button>`)).join("") : `<div class="empty" style="padding:16px">No members yet</div>`) +
+    `<p class="hint" style="margin:-4px 0 8px">Leaders can post announcements and events. Tap “Can post” to let a member post too.</p>` +
+    (mem.length ? mem.map(u => row(u, `<button class="pill ${u.canPost ? "ok" : "ghost"}" data-act="canPost" data-id="${esc(u.id)}" aria-pressed="${!!u.canPost}">${u.canPost ? "✓ Can post" : "Can post"}</button><button class="pill ghost" data-act="role" data-id="${esc(u.id)}" data-role="leader">Make leader</button><button class="pill no" data-act="role" data-id="${esc(u.id)}" data-role="removed">Remove</button>`)).join("") : `<div class="empty" style="padding:16px">No members yet</div>`) +
     (removed.length ? `<div class="sec-title">Removed · ${removed.length}</div>` + removed.map(u => row(u, `<button class="pill ghost" data-act="role" data-id="${esc(u.id)}" data-role="member">Approve again</button>`)).join("") : "");
 }
 function manageReports(){
@@ -2211,6 +2224,7 @@ document.addEventListener("click", async e => {
     if (act === "installNow" && installEvt){ installEvt.prompt(); const { outcome } = await installEvt.userChoice; installEvt = null; if (outcome === "accepted") store.set("hideTip", true); renderAnn(); }
     if (act === "openRoom") openRoom(id);
     if (act === "switcher") openSwitcher();
+    if (act === "canPost"){ const u = S.members[id]; await api.setCanPost(id, !u?.canPost); toast(u?.canPost ? `${u.name} can no longer post` : `${u?.name} can now post announcements & events`); }
     if (act === "leaveChurch") leaveChurchFlow();
     if (act === "deleteChurch") deleteChurchFlow();
     if (act === "pushOn") enablePush();

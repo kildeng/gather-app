@@ -150,8 +150,7 @@ export function createCommunityUI({ root, newsRoot, getContext, getApi, sheet, t
         <div class="sg-cform-row"><label class="sg-check sm" title="Shown with a Bible name instead of yours"><input type="checkbox" name="anon"> Anonymous 🕊</label><button class="btn" type="submit">Send</button></div></form></div>`;
   }
   function devotionPage() {
-    let html = `<div class="sg-bible"><a class="btn secondary" href="${YOUVERSION.verseOfDay}" target="_blank" rel="noopener">📖 Verse of the Day</a><a class="btn secondary" href="${YOUVERSION.home}" target="_blank" rel="noopener">Open YouVersion Bible</a></div>
-      <button class="compose-btn" data-sg="newDevotion">＋ Share what moved you today</button>`;
+    let html = `<button class="compose-btn" data-sg="newDevotion">＋ Share what moved you today</button>`;
     if (!devLoaded) return html + '<p role="status">Loading…</p>';
     if (!devotions.length) return html + `<div class="empty">No devotions yet. Share what God showed you or how you were moved today 📖</div>`;
     let last = '';
@@ -234,7 +233,7 @@ export function createCommunityUI({ root, newsRoot, getContext, getApi, sheet, t
         <details class="sg-who"><summary>✅ ${s.going.length} going · 🤔 ${s.maybe.length} maybe · ${s.no.length} can't go</summary>
           ${s.going.length ? `<p><b>Going:</b> ${esc(names(s.going))}</p>` : ''}${s.maybe.length ? `<p><b>Maybe:</b> ${esc(names(s.maybe))}</p>` : ''}${s.no.length ? `<p><b>Can't go:</b> ${esc(names(s.no))}</p>` : ''}
           ${!s.going.length && !s.maybe.length && !s.no.length ? '<p class="sg-muted">No answers yet.</p>' : ''}</details>
-        ${isLeader() ? `<div class="sg-actions sg-small"><button class="link-btn" data-ev="edit" data-id="${esc(e.id)}">Edit</button><button class="link-btn danger" data-ev="del" data-id="${esc(e.id)}">Delete</button></div>` : ''}
+        ${isLeader() || (ctx.membership?.canPost && e.uid === me()) ? `<div class="sg-actions sg-small"><button class="link-btn" data-ev="edit" data-id="${esc(e.id)}">Edit</button><button class="link-btn danger" data-ev="del" data-id="${esc(e.id)}">Delete</button></div>` : ''}
       </div></article>`;
   }
 
@@ -269,7 +268,7 @@ export function createCommunityUI({ root, newsRoot, getContext, getApi, sheet, t
       <label>Bible passage (optional)<input name="ref" maxlength="100" placeholder="e.g. Psalm 23:1–3"></label>
       <label>Verse (optional)<textarea name="verse" maxlength="1500" rows="3" placeholder="Type or paste the verse"></textarea></label>
       <label>What moved me today<textarea name="body" maxlength="3000" required placeholder="A thought, something that touched your heart, a lesson, a prayer…"></textarea></label>
-      <p class="sg-muted"><a href="${YOUVERSION.verseOfDay}" target="_blank" rel="noopener">Need a verse? See today's Verse of the Day on YouVersion ↗</a></p>
+      <p class="sg-muted">Need a verse? Today's Verse of the Day is on the News and Bible tabs.</p>
       ${anonBox('Your name won’t be shown to anyone')}${buttons('Share')}`,
     async f => { const d = { ref: String(f.get('ref') || '').trim(), verse: String(f.get('verse') || '').trim(), body: String(f.get('body') || '').trim(), anon: f.get('anon') === 'on' };
       validateDevotion(d); await getApi().addDevotion(d); page = 'devotion'; render(); toast('Shared. Thank you!'); });
