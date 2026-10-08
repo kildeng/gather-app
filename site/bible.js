@@ -80,8 +80,7 @@ export function createBible({ root, apiBase = '/api/bible', demo = false, store,
     if (!root || root.classList.contains('hidden')) return;
     const [code, ch] = pos, book = BOOK[code];
     const prev = stepChapter(code, ch, -1), next = stepChapter(code, ch, 1);
-    root.innerHTML = `${votdCard(false)}
-      <section class="bible-reader">
+    root.innerHTML = `<section class="bible-reader">
         <div class="bible-pick">
           <select id="bibleBook" aria-label="Book">${BIBLE_BOOKS.map(([c, n]) => `<option value="${c}" ${c === code ? 'selected' : ''}>${n}</option>`).join('')}</select>
           <select id="bibleCh" aria-label="Chapter">${Array.from({ length: book.chapters }, (_, i) => `<option ${i + 1 === ch ? 'selected' : ''}>${i + 1}</option>`).join('')}</select>
