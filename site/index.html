@@ -143,21 +143,43 @@ main{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;min-height:0}
 .locked{font-style:italic;color:var(--ink-3)}
 
 /* chat list */
-.rooms{display:flex;flex-direction:column;background:var(--card);border:1px solid var(--line);border-radius:16px;overflow:hidden}
-.room-row{display:flex;gap:14px;align-items:center;padding:16px 16px;min-height:84px;text-align:left;width:100%;border-bottom:1px solid var(--line)}
-.room-row:last-child{border-bottom:0}
-.room-row .avatar,.room-row .brandmark{width:58px;height:58px;font-size:18px;flex-shrink:0}
-.room-row .brandmark{border-radius:14px;font-size:14px}
+.rooms{display:flex;flex-direction:column;gap:10px}
+.chat-sec{display:flex;align-items:baseline;justify-content:space-between;margin:22px 4px 10px;font-size:13px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3)}
+.chat-sec b{font-size:12px;letter-spacing:0;color:var(--ink-3);font-weight:700;text-transform:none}
+.room-row{position:relative;display:flex;gap:14px;align-items:center;padding:14px 16px;min-height:86px;text-align:left;width:100%;background:var(--card);border:1px solid var(--line);border-radius:20px;box-shadow:0 1px 2px rgba(27,31,59,.04),0 6px 18px -10px rgba(27,31,59,.18);transition:transform .12s ease,box-shadow .12s ease}
+.room-row:active{transform:scale(.985)}
+.room-row .avatar,.room-row .brandmark{width:56px;height:56px;font-size:18px;flex-shrink:0;box-shadow:0 0 0 3px var(--card),0 0 0 4px var(--line)}
+.room-row .brandmark{border-radius:16px;font-size:14px}
 .room-row .mid{flex:1;min-width:0}
-.room-row .t{font-weight:700;font-size:17px;display:flex;align-items:center;gap:6px;min-width:0}
+.room-row .t{font-weight:800;font-size:17px;letter-spacing:-.2px;display:flex;align-items:center;gap:6px;min-width:0}
 .room-row .t span.nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.room-row .t svg{width:14px;height:14px;color:var(--lock);flex-shrink:0}
-.room-row .p{font-size:15px;margin-top:2px;color:var(--ink-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.room-row.unread .p{color:var(--ink);font-weight:600}
-.room-row .r{display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0}
-.room-row .when{font-size:12px;color:var(--ink-3);font-variant-numeric:tabular-nums}
-.room-row .ud{width:10px;height:10px;border-radius:50%;background:var(--accent)}
-.room-row .ub{min-width:24px;height:24px;padding:0 7px;border-radius:999px;background:var(--accent);color:#fff;font-size:13px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box}
+.room-row .t svg{width:13px;height:13px;color:var(--lock);flex-shrink:0;opacity:.8}
+.room-row .p{font-size:15px;margin-top:3px;color:var(--ink-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.room-row .r{display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0;align-self:stretch;justify-content:center}
+.room-row .when{font-size:12px;color:var(--ink-3);font-weight:600;font-variant-numeric:tabular-nums}
+.room-row.unread{border-color:color-mix(in srgb,var(--accent) 45%,var(--line));background:linear-gradient(90deg,color-mix(in srgb,var(--accent) 9%,var(--card)),var(--card) 70%)}
+.room-row.unread::before{content:"";position:absolute;left:-1px;top:18px;bottom:18px;width:4px;border-radius:0 4px 4px 0;background:var(--accent)}
+.room-row.unread .p{color:var(--ink);font-weight:650}
+.room-row.unread .when{color:var(--accent);font-weight:800}
+.room-row.unread .avatar,.room-row.unread .brandmark{box-shadow:0 0 0 3px var(--card),0 0 0 5px var(--accent)}
+.room-row .ud{width:12px;height:12px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 4px color-mix(in srgb,var(--accent) 20%,transparent)}
+.room-row .ub{min-width:26px;height:26px;padding:0 8px;border-radius:999px;background:var(--accent);color:#fff;font-size:13px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;box-shadow:0 4px 10px -3px color-mix(in srgb,var(--accent) 70%,transparent)}
+/* the whole group's chat: a bold card at the top */
+.room-row.hero{flex-wrap:wrap;gap:12px 14px;padding:18px;min-height:0;border:0;border-radius:24px;color:#fff;background:radial-gradient(120% 140% at 100% 0%,color-mix(in srgb,var(--accent-2) 70%,var(--accent)) 0%,var(--accent) 45%,color-mix(in srgb,var(--accent) 70%,#1B1F3B) 100%);box-shadow:0 14px 30px -14px color-mix(in srgb,var(--accent) 80%,transparent)}
+.room-row.hero::before{display:none}
+.room-row.hero .brandmark{background:rgba(255,255,255,.22);box-shadow:inset 0 0 0 1px rgba(255,255,255,.35);backdrop-filter:blur(4px)}
+.room-row.hero .kick{font-size:11px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;opacity:.85}
+.room-row.hero .t{font-size:20px}
+.room-row.hero .p,.room-row.hero.unread .p{color:rgba(255,255,255,.92);font-weight:500}
+.room-row.hero .when,.room-row.hero.unread .when{color:rgba(255,255,255,.9)}
+.room-row.hero .ub{background:#fff;color:var(--accent);box-shadow:0 4px 12px -4px rgba(0,0,0,.35)}
+.room-row.hero .ud{background:#fff;box-shadow:0 0 0 4px rgba(255,255,255,.3)}
+.room-row.hero .foot{flex-basis:100%;display:flex;align-items:center;justify-content:space-between;padding-top:12px;border-top:1px solid rgba(255,255,255,.22);font-size:13px;font-weight:600}
+.stack{display:flex;align-items:center}
+.stack .avatar{width:28px;height:28px;font-size:10px;font-weight:800;margin-left:-7px;background:#fff;color:var(--accent);box-shadow:0 0 0 2px var(--accent)}
+.stack .avatar:first-child{margin-left:0}
+.stack .more{margin-left:8px;opacity:.9}
+.hero .go{display:inline-flex;align-items:center;gap:4px;background:rgba(255,255,255,.2);padding:5px 12px;border-radius:999px}
 .list-note{font-size:12.5px;color:var(--ink-3);margin:12px 4px 0;display:flex;gap:6px;align-items:flex-start}
 .list-note svg{width:14px;height:14px;margin-top:3px;color:var(--lock)}
 
@@ -641,7 +663,7 @@ async function firebaseApi(){
   const ts = F.serverTimestamp;
 
   let user = null, acct = null, K = null;                 // K = this device's keys { priv, pub, fp, dev }
-  let cid = null, H = null, subsMe = [], subsIn = [], roomSub = null;
+  let cid = null, H = null, subsMe = [], subsIn = [], roomSub = null, roomRedo = null;
   let myRole = null, churchKey = null, ckSeen = null, members = {}, rawAnns = [], rawReports = [], mineRooms = [], mainRoom = null;
   const roomKeyCache = {}, msgCache = new Map(), media = new Map();
   const unsubAll = a => { a.forEach(u => u()); a.length = 0; };
@@ -657,6 +679,7 @@ async function firebaseApi(){
       await keyStore.set(user.uid, local).catch(() => {});
     }
     K = local;
+    try { navigator.storage?.persist?.(); } catch {}   // ask the browser not to clear this device's key
   }
   const myDevs = () => ({ [K.dev]: { pub: JSON.stringify(K.pub), fp: K.fp } });
   const devsOf = u => u === user.uid ? { ...(members[u]?.devs || {}), ...myDevs() } : (members[u]?.devs || {});
@@ -696,6 +719,7 @@ async function firebaseApi(){
         reads: Object.fromEntries(Object.entries(r.reads || {}).map(([u, t]) => [u, toMs(t)])) };
     }));
     H?.rooms(list);
+    roomRedo?.();
     heal();
   }
   async function emitReports(){
@@ -712,26 +736,31 @@ async function firebaseApi(){
   // Any approved member who has a key can share it, so no one gets stuck.
   let healT = null;
   function heal(){ clearTimeout(healT); healT = setTimeout(healNow, 900); }
+  const wrapFor = async (key, v) => { try { return v?.pub && v.fp ? await C.wrap(key, JSON.parse(v.pub)) : null; } catch(e){ console.warn("skip device", e); return null; } };
   async function healNow(){
-    if (!K || !["member","leader"].includes(myRole)) return;
+    if (!K || !cid || !["member","leader"].includes(myRole)) return;
     if (churchKey){
       for (const [id, m] of Object.entries(members)){
         if (!["member","leader"].includes(m.role)) continue;
         const upd = {};
-        for (const [dev, v] of Object.entries(m.devs || {})) if (m.ck?.[dev]?.for !== v.fp) upd["ck." + dev] = await C.wrap(churchKey, JSON.parse(v.pub));
+        for (const [dev, v] of Object.entries(m.devs || {})) if (m.ck?.[dev]?.for !== v?.fp){ const w = await wrapFor(churchKey, v); if (w) upd["ck." + dev] = w; }
         if (Object.keys(upd).length) await F.updateDoc(d("churches", cid, "members", id), upd).catch(e => console.warn(e));
       }
     }
     for (const r of mineRooms){
       const key = await roomKey(r); if (!key) continue;
       const upd = {};
-      for (const id of r.members){
+      for (const id of r.members || []){
         if (!["member","leader"].includes(members[id]?.role)) continue;
-        for (const [dev, v] of Object.entries(devsOf(id))) if (r.wk?.[id]?.[dev]?.for !== v.fp) upd[`wk.${id}.${dev}`] = await C.wrap(key, JSON.parse(v.pub));
+        for (const [dev, v] of Object.entries(devsOf(id))) if (r.wk?.[id]?.[dev]?.for !== v?.fp){ const w = await wrapFor(key, v); if (w) upd[`wk.${id}.${dev}`] = w; }
       }
-      if (Object.keys(upd).length) F.updateDoc(d("churches", cid, "rooms", r.id), upd).catch(e => console.warn(e));
+      if (Object.keys(upd).length) await F.updateDoc(d("churches", cid, "rooms", r.id), upd).catch(e => console.warn(e));
     }
   }
+  // check again whenever the app comes back to the screen, and every minute while it's open,
+  // so a member whose phone is waiting for a key gets it as soon as anyone else has the app open
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") heal(); });
+  setInterval(() => { if (document.visibilityState === "visible") heal(); }, 60000);
 
   function attachInside(){
     unsubAll(subsIn);
@@ -967,9 +996,9 @@ async function firebaseApi(){
         const m = s.exists() ? s.data() : null;
         // make sure this device is listed so others can share keys with it
         if (m && m.role !== "removed" && m.devs?.[K.dev]?.fp !== K.fp){   // (closed groups are skipped)
-          const upd = { ["devs." + K.dev]: { pub: JSON.stringify(K.pub), fp: K.fp } };
-          const others = Object.keys(m.devs || {}).filter(x => x !== K.dev);
-          if (others.length >= 8) upd["devs." + others[0]] = F.deleteField();   // keep the list short
+          const upd = { ["devs." + K.dev]: { pub: JSON.stringify(K.pub), fp: K.fp, at: Date.now() } };
+          const others = Object.entries(m.devs || {}).filter(([x]) => x !== K.dev).sort((a, b) => (a[1]?.at || 0) - (b[1]?.at || 0));
+          if (others.length >= 8) upd["devs." + others[0][0]] = F.deleteField();   // keep the list short: drop the oldest
           F.updateDoc(d("churches", c, "members", user.uid), upd).catch(e => console.warn(e));
         }
         // one-time upgrade for groups made before per-device keys: the leader starts a fresh group key
@@ -990,10 +1019,14 @@ async function firebaseApi(){
       }, e => { console.warn(e); H?.me(null); }));
     },
     closeChurch(){ unsubAll(subsMe); unsubAll(subsIn); unsubAll(subsCom); Object.values(minePrayerSubs).forEach(u => u()); for (const k in minePrayerSubs) delete minePrayerSubs[k];
-      stopPrayerComments(); evCb = prCb = dvCb = cmCb = pcCb = null; rawEvents = []; rawPrayers = []; rawMinePrayers = {}; rawDev = []; rawCom = []; myOwned = []; roomSub?.(); roomSub = null; cid = null; H = null; rawAnns = []; rawReports = []; mineRooms = []; mainRoom = null; members = {}; },
+      stopPrayerComments(); evCb = prCb = dvCb = cmCb = pcCb = null; rawEvents = []; rawPrayers = []; rawMinePrayers = {}; rawDev = []; rawCom = []; myOwned = []; roomSub?.(); roomSub = null; roomRedo = null; cid = null; H = null; rawAnns = []; rawReports = []; mineRooms = []; mainRoom = null; members = {}; },
     watchRoom(rid, cb){
       roomSub?.();
-      roomSub = F.onSnapshot(F.query(col("churches", cid, "rooms", rid, "messages"), F.orderBy("createdAt", "desc"), F.limit(MSG_LIMIT)), async s => {
+      let lastSnap = null, hadLocked = false;
+      // if this chat's key shows up after the messages were drawn (a new phone just got access), unlock them right away
+      roomRedo = () => { if (lastSnap && hadLocked) handle(lastSnap); };
+      const handle = async s => {
+        lastSnap = s;
         const key = await roomKey(rawRoom(rid));
         const list = await Promise.all(s.docs.map(async x => {
           const v = x.data(), k = x.id + ":" + v.ct?.length + ":" + !!key;
@@ -1003,9 +1036,11 @@ async function firebaseApi(){
           if (p && v.createdAt) msgCache.set(k, m);
           return m;
         }));
+        hadLocked = list.some(m => m.locked);
         cb(list.reverse());
-      }, e => { console.warn(e); toast("Couldn't open this chat."); });
-      return () => { roomSub?.(); roomSub = null; };
+      };
+      roomSub = F.onSnapshot(F.query(col("churches", cid, "rooms", rid, "messages"), F.orderBy("createdAt", "desc"), F.limit(MSG_LIMIT)), handle, e => { console.warn(e); toast("Couldn't open this chat."); });
+      return () => { roomSub?.(); roomSub = null; roomRedo = null; };
     },
     async addAnn(title, body, pinned){
       if (!churchKey) throw new Error("no-key");
@@ -1686,17 +1721,30 @@ function renderChats(){
   const list = Object.values(S.rooms).filter(inRoom).sort((a, b) => (b.type === "main") - (a.type === "main") || (b.lastAt || 0) - (a.lastAt || 0));
   const row = r => {
     const who = r.lastUid === S.user.uid ? "You" : nameOf(r.lastUid);
-    const preview = r.locked ? "🔒 Waiting for access" : r.lastText ? (r.type !== "dm" || r.lastUid === S.user.uid ? who + ": " : "") + r.lastText : (r.type === "main" ? "Everyone in " + (theme()?.name || "the group") : "No messages yet");
+    const preview = r.locked ? "🔒 Unlocking…" : r.lastText ? (r.type !== "dm" || r.lastUid === S.user.uid ? who + ": " : "") + r.lastText : (r.type === "main" ? "Everyone in " + (theme()?.name || "the group") : "No messages yet");
     return `<button class="room-row ${isUnread(r) ? "unread" : ""}" data-act="openRoom" data-id="${esc(r.id)}" data-room="${esc(r.id)}">
       ${roomAvatar(r)}
       <div class="mid"><div class="t"><span class="nm">${esc(roomTitle(r))}</span>${r.type !== "main" ? IC.lock : ""}</div><div class="p">${esc(preview)}</div></div>
       <div class="r"><span class="when">${fmtShort(r.lastAt)}</span>${isUnread(r) ? unreadBadge(r) : ""}</div>
     </button>`;
   };
+  const main = list.find(r => r.type === "main"), rest = list.filter(r => r.type !== "main");
+  const hero = r => {
+    const people = roomPeople(r), un = isUnread(r);
+    const preview = r.locked ? "🔒 Unlocking…" : r.lastText ? (r.lastUid === S.user.uid ? "You" : nameOf(r.lastUid)) + ": " + r.lastText : "Say hi to everyone 👋";
+    return `<button class="room-row hero ${un ? "unread" : ""}" data-act="openRoom" data-id="${esc(r.id)}" data-room="${esc(r.id)}">
+      ${roomAvatar(r)}
+      <div class="mid"><div class="kick">Whole group</div><div class="t"><span class="nm">${esc(roomTitle(r))}</span></div><div class="p">${esc(preview)}</div></div>
+      <div class="r"><span class="when">${fmtShort(r.lastAt)}</span>${un ? unreadBadge(r) : ""}</div>
+      <div class="foot"><span class="stack">${people.slice(0, 5).map(u => avatarHTML(nameOf(u), photoOf(u))).join("")}<span class="more">${people.length} ${people.length === 1 ? "person" : "people"}</span></span><span class="go">Open →</span></div>
+    </button>`;
+  };
   const st = notifState();
   $("#vChats").innerHTML =
     (st === "off" && !store.get("hidePushTip", false) ? `<div class="push-tip"><span>🔔</span><div><b>Turn on notifications</b> so you know when someone messages you.<br><button class="link-btn" data-act="pushOn" style="padding:4px 0;color:var(--accent);font-weight:700">Turn on</button> · <button class="link-btn" data-act="hidePushTip" style="padding:4px 0">Not now</button></div></div>` : "") +
-    (list.length ? `<div class="rooms">${list.map(row).join("")}</div>` : `<div class="empty">No chats yet. Tap ＋ to start one.</div>`) +
+    (main ? hero(main) : "") +
+    `<div class="chat-sec"><span>Groups & messages</span>${rest.length ? `<b>${rest.length}</b>` : ""}</div>` +
+    (rest.length ? `<div class="rooms">${rest.map(row).join("")}</div>` : `<div class="empty">No other chats yet. Tap ＋ to start a group or a private message.</div>`) +
     `<div class="list-note">${IC.lock}<span>All chats are end-to-end encrypted. Private chats and groups are only visible to the people in them. Press and hold a chat for more options.</span></div>`;
 }
 // press-and-hold (or right-click) a chat in the list: leave / delete without opening it
@@ -1807,7 +1855,7 @@ function renderMsgs(stick){
     html += `<div class="msg ${mine ? "me" : ""} ${cont ? "cont" : ""}" data-msg="${esc(m.id)}">
       ${mine ? "" : avatarHTML(nameOf(m.uid), photoOf(m.uid))}
       <div class="col">${showWho ? `<div class="who">${esc(nameOf(m.uid))}${S.members[m.uid]?.role === "leader" ? ` <span class="lead">· Leader</span>` : ""}</div>` : ""}
-        ${m.locked ? `<div class="bubble locked" data-sel>🔒 Waiting for access…</div>` : (m.file ? fileHTML(m.file, m.id) : "") + (m.text ? `<div class="bubble" data-sel>${esc(m.text)}</div>` : "")}
+        ${m.locked ? `<div class="bubble locked" data-sel>🔒 Unlocking… This opens automatically once another member's app shares the key with this phone.</div>` : (m.file ? fileHTML(m.file, m.id) : "") + (m.text ? `<div class="bubble" data-sel>${esc(m.text)}</div>` : "")}
         ${acts ? `<div class="acts">${acts}</div>` : ""}</div>
       <span class="time">${rc > 0 ? `<span class="rc" title="${rc} haven't read yet">${rc}</span>` : rc === 0 ? `<span class="rc all" title="Everyone read this">${IC.check}</span>` : ""}${fmtTime(m.at)}</span>
     </div>`;

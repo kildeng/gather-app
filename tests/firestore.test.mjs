@@ -243,3 +243,18 @@ test('posting: leaders and members a leader allowed can post announcements and e
   await assertFails(deleteDoc(doc(db('member'), ev('m2'))));
   await assertSucceeds(deleteDoc(doc(db('leader'), ev('m2'))));
 });
+test('group chat: members post, everyone reads, and "read" receipts can be saved', async () => {
+  await env.withSecurityRulesDisabled(async ctx => { await setDoc(doc(ctx.firestore(), `churches/${cid}/rooms/main`), { type: 'main', members: [], createdBy: 'leader', createdAt: Timestamp.now() }); });
+  const room = `churches/${cid}/rooms/main`;
+  const f = db('member'), b = writeBatch(f), mref = doc(f, room + '/messages/m1');
+  b.set(mref, { uid: 'member', ...box, createdAt: serverTimestamp() });
+  b.update(doc(f, room), { lastAt: serverTimestamp(), lastUid: 'member', lastEnc: box });
+  await assertSucceeds(b.commit());
+  await assertSucceeds(getDocs(collection(db('member2'), room + '/messages')));
+  await assertSucceeds(getDocs(collection(db('leader'), room + '/messages')));
+  await assertFails(getDocs(collection(db('pending'), room + '/messages')));
+  await assertSucceeds(updateDoc(doc(db('member2'), room), { 'reads.member2': serverTimestamp() }));
+  await assertSucceeds(updateDoc(doc(db('leader'), room), { 'reads.leader': serverTimestamp() }));
+  await assertSucceeds(updateDoc(doc(db('member2'), room), { 'reads.member2': serverTimestamp() }));   // again, later
+  await assertFails(updateDoc(doc(db('member2'), room), { 'reads.member': serverTimestamp() }));
+});
