@@ -157,6 +157,7 @@ main{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;min-height:0}
 .room-row .r{display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0}
 .room-row .when{font-size:12px;color:var(--ink-3);font-variant-numeric:tabular-nums}
 .room-row .ud{width:10px;height:10px;border-radius:50%;background:var(--accent)}
+.room-row .ub{min-width:24px;height:24px;padding:0 7px;border-radius:999px;background:var(--accent);color:#fff;font-size:13px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box}
 .list-note{font-size:12.5px;color:var(--ink-3);margin:12px 4px 0;display:flex;gap:6px;align-items:flex-start}
 .list-note svg{width:14px;height:14px;margin-top:3px;color:var(--lock)}
 
@@ -1046,6 +1047,11 @@ async function firebaseApi(){
     },
     // "I've read up to now" — used for the little unread numbers next to messages
     markRead: rid => F.updateDoc(d("churches", cid, "rooms", rid), { ["reads." + user.uid]: ts() }).catch(e => console.warn(e)),
+    // how many messages arrived after a moment — only a count; nothing is downloaded or decrypted
+    async unreadCount(rid, since){
+      const q = F.query(col("churches", cid, "rooms", rid, "messages"), F.where("createdAt", ">", F.Timestamp.fromMillis(since)));
+      return (await F.getCountFromServer(q)).data().count;
+    },
     // every photo, video and file ever posted in a chat (for the chat info screen)
     async roomMedia(rid){
       const key = await roomKey(rawRoom(rid)); if (!key) return [];
@@ -1244,7 +1250,7 @@ function demoApi(){
   Object.keys(ch.rooms).forEach(id => last(ch, id));
   // who has read up to when (u3 hasn't opened the main chat in a while)
   const allIds = Object.keys(ch.members);
-  Object.values(ch.rooms).forEach(r => { r.reads = {}; (r.type === "main" ? allIds : r.members).forEach(u => r.reads[u] = u === "u3" ? now - 30*Hr : now); });
+  Object.values(ch.rooms).forEach(r => { r.reads = {}; (r.type === "main" ? allIds : r.members).forEach(u => r.reads[u] = u === "u3" ? now - 30*Hr : (u === "me" && r.type === "main") ? now - 51*M : now); });
 
   const c = () => churches[cur];
   const myRole = () => c()?.members[uid()]?.role;
@@ -1352,6 +1358,7 @@ function demoApi(){
       const others = (rid === "main" ? Object.keys(c().members).filter(u => ["member","leader"].includes(c().members[u].role)) : c().rooms[rid].members).filter(u => u !== uid() && u !== "u3");
       others.forEach((u, i) => setTimeout(() => { if (c()?.rooms[rid]){ c().rooms[rid].reads[u] = Date.now(); push(); } }, 2500 + i * 1500)); },
     async markRead(rid){ const r = c()?.rooms[rid]; if (r){ (r.reads ||= {})[uid()] = Date.now(); push(); } },
+    async unreadCount(rid, since){ return (c()?.msgs[rid] || []).filter(m => m.at > since && m.uid !== uid()).length; },
     async roomMedia(rid){ return (c().msgs[rid] || []).filter(x => x.file).map(x => ({ id: x.id, uid: x.uid, at: x.at, file: x.file })).reverse(); },
     async savePush(){},
     async idToken(){ return ""; },
@@ -1408,7 +1415,22 @@ function sysText(m){
   const n = nameOf(m.uid), list = (m.who || []).map(nameOf).join(", ");
   return { left: `${n} left the chat`, added: `${n} added ${list}`, removed: `${n} removed ${list}`, renamed: `${n} renamed the chat to “${(m.who || [])[0] || ""}”` }[m.sys] || "";
 }
-const isUnread = r => inRoom(r) && r.lastAt && r.lastUid !== S.user?.uid && r.lastAt > store.get(seenKey(r.id), 0) && S.room !== r.id;
+// unread messages per chat, counted on the server since the last time I read it (on any of my devices)
+const unreadN = {};
+const lastReadAt = r => Math.max(r.reads?.[S.user?.uid] || 0, store.get(seenKey(r.id), 0));
+const unreadKey = {};
+function refreshUnread(){
+  for (const r of Object.values(S.rooms)){
+    if (!isUnread(r)){ delete unreadN[r.id]; delete unreadKey[r.id]; continue; }
+    const since = lastReadAt(r), k = `${r.lastAt}:${since}`;
+    if (unreadKey[r.id] === k) continue;
+    unreadKey[r.id] = k;
+    api.unreadCount(r.id, since).then(n => { if (unreadKey[r.id] !== k) return; unreadN[r.id] = n; if (S.tab === "chats" && !S.room) renderChats(); badges(); })
+      .catch(e => { console.warn(e); delete unreadKey[r.id]; });
+  }
+}
+const unreadBadge = r => { const n = unreadN[r.id]; return n > 0 ? `<span class="ub" aria-label="${n} unread">${n > 99 ? "99+" : n}</span>` : `<span class="ud" aria-label="New messages"></span>`; };
+const isUnread = r => inRoom(r) && r.lastAt && r.lastUid !== S.user?.uid && r.lastAt > lastReadAt(r) + 500 && S.room !== r.id;
 
 function applyTheme(t){
   document.documentElement.style.setProperty("--accent", t?.accent || ACCENTS[0]);
@@ -1511,7 +1533,7 @@ function smallGroupHomeCard(){
     <span>Open Small Group →</span></button>`;
 }
 document.addEventListener("click", e => { if (e.target.closest('[data-act="smallGroups"]')) setTab("groups"); });
-function refreshChats(){ if (S.room) renderRoomHeader(); else if (S.tab === "chats") renderChats(); badges(); }
+function refreshChats(){ refreshUnread(); if (S.room) renderRoomHeader(); else if (S.tab === "chats") renderChats(); badges(); }
 function rerenderTab(){ ({ ann: renderAnn, chats: renderChats, groups: () => smallGroups.sync(), bible: () => bible.render(), manage: renderManage, me: renderMe })[S.tab]?.(); }
 const bible = createBible({ root: $("#vBible"), demo: DEMO, store, toast, onVotd: () => { if (S.tab === "ann" && !S.room && S.cid) renderAnn(); } });
 document.addEventListener("click", e => { if (e.target.closest('[data-bible="open"]')) setTab("bible"); });
@@ -1628,7 +1650,7 @@ function renderHeader(){
 function badges(){
   const meId = S.user?.uid, seenAnn = store.get(`seenAnn:${S.cid}`, 0);
   const nA = S.tab === "ann" && !S.room ? 0 : S.anns.filter(a => a.at > seenAnn && a.uid !== meId).length;
-  const nC = Object.values(S.rooms).filter(isUnread).length;
+  const nC = Object.values(S.rooms).filter(isUnread).reduce((sum, r) => sum + (unreadN[r.id] || 1), 0);
   const nM = isLeader() ? Object.values(S.members).filter(m => m.role === "pending").length + S.reports.length : 0;
   const set = (id, n) => { const el = $(id); el.textContent = n > 99 ? "99+" : n; el.classList.toggle("hidden", !n); };
   set("#dotAnn", nA); set("#dotChat", nC); set("#dotManage", nM);
@@ -1668,7 +1690,7 @@ function renderChats(){
     return `<button class="room-row ${isUnread(r) ? "unread" : ""}" data-act="openRoom" data-id="${esc(r.id)}" data-room="${esc(r.id)}">
       ${roomAvatar(r)}
       <div class="mid"><div class="t"><span class="nm">${esc(roomTitle(r))}</span>${r.type !== "main" ? IC.lock : ""}</div><div class="p">${esc(preview)}</div></div>
-      <div class="r"><span class="when">${fmtShort(r.lastAt)}</span>${isUnread(r) ? `<span class="ud"></span>` : ""}</div>
+      <div class="r"><span class="when">${fmtShort(r.lastAt)}</span>${isUnread(r) ? unreadBadge(r) : ""}</div>
     </button>`;
   };
   const st = notifState();
@@ -1736,6 +1758,7 @@ function openRoom(id, fromHistory = false){
 function closeRoom(silent = false){
   if (!S.room) return;
   roomUnsub?.(); roomUnsub = null;
+  markSeen(); delete unreadN[S.room];
   S.room = null; S.msgs = [];
   if (!silent){ $("#vRoom").classList.add("hidden"); setTab("chats"); }
 }
@@ -2240,7 +2263,7 @@ async function sendFiles(files){
       const up = await api.upload(rid, blob, name, p => { S.uploads[key].p = p; const bar = document.querySelector(`#up_${key} .bar i`); if (bar) bar.style.width = Math.round(p * 100) + "%"; });
       delete S.uploads[key];
       if (up.path && type?.startsWith("image/")) mediaUrls.set(up.path, URL.createObjectURL(blob));
-      await api.send(rid, "", { name, type: type || "application/octet-stream", size: blob.size, ...up });
+      await api.send(rid, "", { name, type: type || "application/octet-stream", size: blob.size, ...up }); api.markRead(rid);
     } catch(err){
       delete S.uploads[key]; if (S.room === rid) renderMsgs(false);
       toast(String(err?.message) === "no-key" ? "Waiting for access to this chat. Try again in a moment." : `${file.name} didn't send. Check your connection and try again.`); console.error(err);
@@ -2314,7 +2337,7 @@ $("#chatForm").addEventListener("submit", async e => {
   e.preventDefault();
   const t = input.value.trim(); if (!t || !S.room) return;
   input.value = ""; input.style.height = "auto"; sendBtn.disabled = true;
-  try { await api.send(S.room, t); const l = $("#msgList"); l.scrollTop = l.scrollHeight; }
+  try { const rid = S.room; await api.send(rid, t); api.markRead(rid); const l = $("#msgList"); l.scrollTop = l.scrollHeight; }
   catch(err){ input.value = t; sendBtn.disabled = false; toast(String(err?.message) === "no-key" ? "Waiting for access to this chat. Try again in a moment." : "Message not sent. Try again."); console.error(err); }
 });
 document.addEventListener("submit", async e => {
