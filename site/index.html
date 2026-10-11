@@ -311,6 +311,12 @@ body.in-room nav.tabs{display:none}
   .sheet{animation:up .22s ease-out}
   @keyframes up{from{transform:translateY(24px);opacity:.6}to{transform:none;opacity:1}}
 }
+
+.qr-wrap{display:flex;flex-direction:column;align-items:center;background:#fff;border:1px solid var(--line);border-radius:18px;padding:18px;margin:12px 0}
+.qr{width:220px;height:220px;display:flex;align-items:center;justify-content:center;color:#6B6F86;font-size:13px;text-align:center}.qr img,.qr canvas{width:220px;height:220px;image-rendering:pixelated}
+.qr-name{margin-top:12px;font-weight:800;color:#1B1F3B;font-size:17px}.qr-hint{font-size:13px;color:#6B6F86}
+.qr-btns{gap:8px;margin-bottom:6px}.qr-btns .btn{flex:1;min-width:0;padding-left:8px;padding-right:8px}
+.qr-invite{margin-bottom:12px}.qr-invite summary{cursor:pointer;font-weight:700;padding:10px 0;min-height:44px}
 </style>
 </head>
 <body>
@@ -1839,6 +1845,7 @@ function renderManage(){
   const body = { people: managePeople, reports: manageReports, invite: manageInvite, look: manageLook }[S.mtab]();
   $("#vManage").innerHTML = `<div class="seg">${seg.map(([k, l, n]) => `<button data-act="mtab" data-k="${k}" class="${S.mtab === k ? "on" : ""}">${l}${n ? `<span class="n">${n}</span>` : ""}</button>`).join("")}</div>${body}`;
   if (S.mtab === "look") bindLook();
+  drawQRs($("#vManage"));
 }
 function managePeople(){
   const all = Object.entries(S.members).map(([id, m]) => ({ id, ...m }));
@@ -1868,12 +1875,48 @@ function manageReports(){
       </div>
     </div>`).join("") + `<p class="hint">A report only includes the one message someone chose to share. Leaders still can't read private chats.</p>`;
 }
+// QR codes for the invite link (library loads only when a QR is shown)
+let qrLib = null;
+const loadQRLib = () => qrLib ||= new Promise((ok, no) => { if (window.QRCode) return ok(); const sc = document.createElement("script"); sc.src = "https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"; sc.onload = ok; sc.onerror = () => { qrLib = null; no(new Error("qr")); }; document.head.appendChild(sc); });
+async function drawQRs(root){
+  const els = [...(root || document).querySelectorAll("[data-qr]")].filter(el => !el.dataset.drawn);
+  if (!els.length) return;
+  try { await loadQRLib(); } catch { els.forEach(el => el.textContent = "QR code couldn't load. Use the link instead."); return; }
+  for (const el of els){ el.dataset.drawn = "1"; el.innerHTML = ""; new QRCode(el, { text: el.dataset.qr, width: 220, height: 220, colorDark: "#1B1F3B", colorLight: "#ffffff", correctLevel: QRCode.CorrectLevel.M }); }
+}
+// a shareable PNG: the QR plus the group's name, on white
+async function qrImage(){
+  const el = document.querySelector("[data-qr][data-drawn]"); if (!el) throw new Error("no-qr");
+  const src = el.querySelector("canvas") || el.querySelector("img");
+  const img = src.tagName === "CANVAS" ? src : await loadImage(src.src);
+  const c = document.createElement("canvas"); c.width = 560; c.height = 680;
+  const g = c.getContext("2d"); g.fillStyle = "#fff"; g.fillRect(0, 0, c.width, c.height);
+  g.imageSmoothingEnabled = false; g.drawImage(img, 60, 60, 440, 440);
+  g.fillStyle = "#1B1F3B"; g.textAlign = "center"; g.font = "bold 34px system-ui, sans-serif"; g.fillText((theme()?.name || "Gather").slice(0, 26), 280, 570);
+  g.fillStyle = "#6B6F86"; g.font = "24px system-ui, sans-serif"; g.fillText("Scan to join on Gather", 280, 615);
+  return new Promise(res => c.toBlob(res, "image/png"));
+}
+async function shareInvite(){
+  const url = inviteLink(S.church.invite), name = theme()?.name || "our group";
+  const text = `Join ${name} on Gather — tap the link (or scan the QR code). A leader will approve you.`;
+  try {
+    const blob = await qrImage().catch(() => null), file = blob && new File([blob], `${name}-invite.png`, { type: "image/png" });
+    if (file && navigator.canShare?.({ files: [file] })) return await navigator.share({ title: `Join ${name}`, text: `${text}\n${url}`, files: [file] });
+    if (navigator.share) return await navigator.share({ title: `Join ${name}`, text, url });
+  } catch (e) { if (e?.name === "AbortError") return; }
+  copyText(url);
+}
+async function saveQR(){
+  try { const blob = await qrImage(), a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `${theme()?.name || "gather"}-invite-qr.png`; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 4000); toast("QR code saved"); }
+  catch { toast("Couldn't save the QR code. Press and hold it to save the image."); }
+}
 function manageInvite(){
   const code = S.church?.invite || "";
   return `<div class="card">
       <div class="sec-title" style="margin-top:0">Invite link</div>
       <div class="linkline">${esc(inviteLink(code))}</div>
-      <button class="btn accent" data-act="copyLink">Copy link</button>
+      <div class="qr-wrap"><div class="qr" data-qr="${esc(inviteLink(code))}" aria-label="QR code for the invite link"></div><div class="qr-name">${esc(theme()?.name || "")}</div><div class="qr-hint">Scan to join</div></div>
+      <div class="row qr-btns"><button class="btn accent" data-act="shareInvite">Share</button><button class="btn secondary" data-act="copyLink">Copy link</button><button class="btn secondary" data-act="saveQR">Save QR</button></div>
       <div class="sec-title">Or share this code</div>
       <div class="code-box">${esc(code)}</div>
       <p class="hint">The link opens an install page with steps for iPhone and Android and shows this code. People who use it can ask to join; you still approve each person under People.</p>
@@ -2128,9 +2171,11 @@ function openRoomInfo(){
   const rows = people.map(id => `<div class="pick">${avatarHTML(nameOf(id), photoOf(id))}<span class="info">${esc(nameOf(id))}${id === me ? " <small>You</small>" : S.members[id]?.role === "leader" ? "<small>Leader</small>" : ""}</span>
       ${admin && id !== me ? `<button class="pill no" data-kick="${esc(id)}">Remove</button>` : ""}</div>`).join("");
   let mtab = "media";
+  setTimeout(() => drawQRs(document.querySelector(".sheet")), 0);
   const bg = sheet(`<h3>${esc(roomTitle(r))}</h3>
     <div class="scroll">
       ${r.type === "group" ? `<div class="field"><label for="grpRename">Chat name</label><div class="row" style="gap:8px"><input id="grpRename" maxlength="40" value="${esc(r.name)}" style="margin:0"><button type="button" class="dice" data-dice aria-label="Pick a Bible name">🎲</button><button class="pill ghost" data-rename>Save</button></div></div>` : ""}
+      ${r.type === "main" && isLeader() && S.church?.invite ? `<details class="qr-invite"><summary>📱 Invite people with a QR code</summary><div class="qr-wrap"><div class="qr" data-qr="${esc(inviteLink(S.church.invite))}"></div><div class="qr-name">${esc(theme()?.name || "")}</div><div class="qr-hint">Scan to join · you approve each person</div></div><div class="row qr-btns"><button class="btn accent" data-act="shareInvite">Share</button><button class="btn secondary" data-act="saveQR">Save QR</button></div></details>` : ""}
       <div class="mtabs"><button data-mt="media" class="on">Photos & videos</button><button data-mt="files">Files</button><button data-mt="people">People · ${people.length}</button></div>
       <div id="infoBody"><div class="empty" style="padding:20px">Loading…</div></div>
       <div class="info-acts">
@@ -2233,6 +2278,8 @@ document.addEventListener("click", async e => {
     if (act === "hidePushTip"){ store.set("hidePushTip", true); renderChats(); }
     if (act === "mtab"){ S.mtab = b.dataset.k; lookDraft = null; renderManage(); }
     if (act === "copyLink") copyText(inviteLink(S.church.invite));
+    if (act === "shareInvite") shareInvite();
+    if (act === "saveQR") saveQR();
     if (act === "newInvite" && await askConfirm("Make a new invite link? The old link and code will stop working.", "Make new link")){ await api.newInvite(S.church.theme, S.church.invite); toast("New invite link ready"); }
     if (act === "report") openReport(id);
     if (act === "dismiss"){ await api.dismissReport(id); toast("Marked as handled"); }
