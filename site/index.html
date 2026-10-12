@@ -162,6 +162,7 @@ main{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;min-height:0}
 .room-row.unread .p{color:var(--ink);font-weight:650}
 .room-row.unread .when{color:var(--accent);font-weight:800}
 .room-row.unread .avatar,.room-row.unread .brandmark{box-shadow:0 0 0 3px var(--card),0 0 0 5px var(--accent)}
+.push-who{margin-top:12px;padding-top:12px;border-top:1px solid var(--line);font-size:14px}.push-who:empty{display:none}.pw-off{margin-top:4px;color:var(--danger);font-weight:600}
 .room-row .ud{width:12px;height:12px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 4px color-mix(in srgb,var(--accent) 20%,transparent)}
 .room-row .ub{min-width:26px;height:26px;padding:0 8px;border-radius:999px;background:var(--accent);color:#fff;font-size:13px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;box-shadow:0 4px 10px -3px color-mix(in srgb,var(--accent) 70%,transparent)}
 /* the whole group's chat: a bold card at the top */
@@ -795,7 +796,10 @@ async function firebaseApi(){
   async function notify(kind, rid){
     try {
       const token = await auth.currentUser?.getIdToken(); if (!token) return;
-      fetch(PUSH_API, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token, cid, rid, kind }), keepalive: true }).catch(() => {});
+      fetch(PUSH_API, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token, cid, rid, kind }), keepalive: true })
+        .then(r => r.json().catch(() => ({ error: "http " + r.status })))
+        .then(j => { try { localStorage.setItem("lastNotify:" + cid, JSON.stringify({ at: Date.now(), kind, ...j })); } catch {} })
+        .catch(() => {});
     } catch {}
   }
   // Group life: events (with RSVP), prayer requests, devotions + likes + comments — all text encrypted with the
@@ -1096,6 +1100,11 @@ async function firebaseApi(){
       return out;
     },
     idToken: () => auth.currentUser.getIdToken(),
+    // who in this group has notifications turned on (number of phones/computers each) — no message data involved
+    async pushStatus(){
+      const s = await F.getDocs(col("churches", cid, "push"));
+      return Object.fromEntries(s.docs.map(x => [x.id, Object.values(x.data().subs || {}).filter(v => v?.endpoint).length]));
+    },
     async savePush(sub){
       if (!cid) return;
       const devs = sub ? { [K.dev]: sub } : { [K.dev]: F.deleteField() };
@@ -1396,6 +1405,7 @@ function demoApi(){
     async unreadCount(rid, since){ return (c()?.msgs[rid] || []).filter(m => m.at > since && m.uid !== uid()).length; },
     async roomMedia(rid){ return (c().msgs[rid] || []).filter(x => x.file).map(x => ({ id: x.id, uid: x.uid, at: x.at, file: x.file })).reverse(); },
     async savePush(){},
+    async pushStatus(){ return Object.fromEntries(Object.keys(c()?.members || {}).map((u, i) => [u, i % 2 ? 0 : 1])); },
     async idToken(){ return ""; },
     async delMsg(rid, msg){ c().msgs[rid] = c().msgs[rid].filter(x => x.id !== msg.id); last(c(), rid); push(); pushRoom(rid); },
     async openDM(other){ const id = dmId(uid(), other); if (!c().rooms[id]){ c().rooms[id] = { id, type:"dm", members:[uid(), other].sort(), createdBy: uid(), lastAt:0, lastText:"", lastUid:"" }; c().msgs[id] = []; push(); } return id; },
@@ -2057,6 +2067,7 @@ function renderMe(){
     <div class="sec-title" style="margin-top:22px">${esc(theme()?.name || "This group")}</div>
     <button class="btn secondary" data-act="leaveChurch" style="color:var(--danger)">Leave this group</button>
     ${p.role === "leader" ? `<button class="btn danger" data-act="deleteChurch">Delete this group for everyone</button>` : ""}`;
+  fillPushWho();
 }
 
 /* Leave or delete a whole group */
@@ -2163,7 +2174,22 @@ function notifCard(){
     install: "On iPhone, notifications work once Gather is on your Home Screen. Open this page in Safari → Share → Add to Home Screen, then open it from there.",
     unsupported: "This browser can't show notifications. Try Chrome, or add the app to your Home Screen." }[st];
   return `<div class="card notif-card"><div style="font-weight:700">🔔 Notifications · ${st === "on" ? "On" : "Off"}</div><p class="hint" style="margin:6px 0 0">${msg}</p>
-    ${st === "on" ? `<div class="row"><button class="btn secondary" data-act="pushTest">Send me a test</button><button class="btn secondary" data-act="pushOff">Turn off</button></div>` : st === "off" ? `<div class="row"><button class="btn accent" data-act="pushOn">Turn on notifications</button></div>` : st === "install" ? `<div class="row"><a class="btn secondary" href="download.html">Show me how</a></div>` : ""}</div>`;
+    ${st === "on" ? `<div class="row"><button class="btn secondary" data-act="pushTest">Send me a test</button><button class="btn secondary" data-act="pushOff">Turn off</button></div>` : st === "off" ? `<div class="row"><button class="btn accent" data-act="pushOn">Turn on notifications</button></div>` : st === "install" ? `<div class="row"><a class="btn secondary" href="download.html">Show me how</a></div>` : ""}
+    <div id="pushWho" class="push-who"></div></div>`;
+}
+// Who will actually get a notification: people only get one on phones where they turned notifications on in this group.
+async function fillPushWho(){
+  const el = $("#pushWho"); if (!el || !S.cid) return;
+  let st; try { st = await api.pushStatus(); } catch(e){ console.warn(e); return; }
+  const people = Object.entries(S.members).filter(([, m]) => m.role === "member" || m.role === "leader");
+  const off = people.filter(([id]) => !st[id]), on = people.length - off.length;
+  let last = null; try { last = JSON.parse(localStorage.getItem("lastNotify:" + S.cid) || "null"); } catch {}
+  const lastLine = last && last.kind !== "test" ? (last.error ? `Your last message's notification didn't go out (${esc(String(last.error))}).`
+    : last.skipped ? `Your last message's notification was skipped (${esc(String(last.skipped))}).`
+    : `Your last message notified ${last.sent || 0} of ${last.devices || 0} phone${last.devices === 1 ? "" : "s"} (${fmtShort(last.at)}).`) : "";
+  el.innerHTML = `<div class="pw-head"><b>${on} of ${people.length}</b> people in ${esc(theme()?.name || "this group")} have notifications on</div>
+    ${off.length ? `<div class="pw-off">Not on yet: ${off.map(([id, m]) => esc(m.name)).join(", ")}</div><p class="hint" style="margin:6px 0 0">They won't get a notification until they open the app and tap <b>Turn on notifications</b> (Me tab). On iPhone, the app must first be added to the Home Screen from Safari.</p>` : ""}
+    ${lastLine ? `<p class="hint" style="margin:6px 0 0">${lastLine}</p>` : ""}`;
 }
 async function pushTest(){
   if (DEMO) return toast("In the real app, a test notification arrives in a few seconds");

@@ -39,7 +39,7 @@ function vapidAuth(endpoint, keys, subject){
   return `vapid t=${head}.${claims}.${b64u(sig)}, k=${keys.publicKey}`;
 }
 
-export async function sendPush(sub, payload, keys, { subject = "mailto:support@gather.app", ttl = 86400, urgency = "high", topic } = {}){
+export async function sendPush(sub, payload, keys, { subject = "https://gather-church-app.netlify.app", ttl = 86400, urgency = "high", topic } = {}){
   const body = encrypt(JSON.stringify(payload), sub.keys.p256dh, sub.keys.auth);
   const headers = { "Content-Encoding": "aes128gcm", "Content-Type": "application/octet-stream", TTL: String(ttl), Urgency: urgency, Authorization: vapidAuth(sub.endpoint, keys, subject) };
   if (topic) headers.Topic = topic;
