@@ -1530,6 +1530,7 @@ const handlers = {
       leaveChurch(); store.set("lastGroup", null); renderHome(); return;
     }
     if (m.role === "member" || m.role === "leader"){
+      autoPush();
       if (prev !== m.role || $("#scrMain").classList.contains("hidden")){
         show("scrMain");
         $("#tabManage").classList.toggle("hidden", m.role !== "leader");
@@ -1751,6 +1752,7 @@ function renderChats(){
   };
   const st = notifState();
   $("#vChats").innerHTML =
+    (st === "install" ? `<div class="push-tip"><span>📲</span><div><b>Get notifications on iPhone:</b> add Gather to your Home Screen (Share → Add to Home Screen) and open it from there. Notifications turn on by themselves.<br><a class="link-btn" href="download.html" style="padding:4px 0;color:var(--accent);font-weight:700">Show me how</a></div></div>` : "") +
     (st === "off" && !store.get("hidePushTip", false) ? `<div class="push-tip"><span>🔔</span><div><b>Turn on notifications</b> so you know when someone messages you.<br><button class="link-btn" data-act="pushOn" style="padding:4px 0;color:var(--accent);font-weight:700">Turn on</button> · <button class="link-btn" data-act="hidePushTip" style="padding:4px 0">Not now</button></div></div>` : "") +
     (main ? hero(main) : "") +
     `<div class="chat-sec"><span>Groups & messages</span>${rest.length ? `<b>${rest.length}</b>` : ""}</div>` +
@@ -2138,11 +2140,27 @@ function notifState(){
   if (Notification.permission === "denied") return "blocked";
   return Notification.permission === "granted" && store.get("pushOn", false) ? "on" : "off";
 }
-async function enablePush(){
+// Notifications turn themselves on: if this phone already allows them, silently; otherwise the phone's
+// "Allow notifications?" question pops up on the first tap anywhere in the app (phones only allow asking after a tap).
+let autoArmed = false;
+function autoPush(){
+  if (DEMO || !S.cid || !["member", "leader"].includes(S.me?.role) || store.get("pushOptOut", false)) return;
+  if (notifState() !== "off") return;
+  if (Notification.permission === "granted") return void enablePush(true);
+  if (autoArmed || sessionStorage.getItem("pushAsked")) return;
+  autoArmed = true;
+  const evs = ["click", "touchend"];
+  const go = () => { evs.forEach(t => document.removeEventListener(t, go, true)); autoArmed = false;
+    try { sessionStorage.setItem("pushAsked", "1"); } catch {}
+    if (notifState() === "off") enablePush(true); };
+  evs.forEach(t => document.addEventListener(t, go, true));
+}
+async function enablePush(auto = false){
   if (DEMO){ store.set("demoPush", true); toast("Notifications on (preview)"); return rerenderTab(); }
   try {
-    const perm = await Notification.requestPermission();
-    if (perm !== "granted"){ toast("Notifications are blocked. You can allow them in your phone's settings."); return rerenderTab(); }
+    const perm = Notification.permission === "granted" ? "granted" : await Notification.requestPermission();
+    if (perm !== "granted"){ if (!auto) toast("Notifications are blocked. You can allow them in your phone's settings."); return rerenderTab(); }
+    store.set("pushOptOut", false);
     const reg = await navigator.serviceWorker.ready, key = await getVapid();
     let sub = await reg.pushManager.getSubscription();
     if (sub && btoa(String.fromCharCode(...new Uint8Array(sub.options?.applicationServerKey || []))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "") !== key){ await sub.unsubscribe().catch(() => {}); sub = null; }
@@ -2150,12 +2168,12 @@ async function enablePush(){
     store.set("pushOn", true);
     await saveSubEverywhere(sub);
     toast("Notifications are on");
-  } catch(e){ console.error(e); toast("Couldn't turn on notifications. Try again."); }
+  } catch(e){ console.error(e); if (!auto) toast("Couldn't turn on notifications. Try again."); }
   rerenderTab();
 }
 async function disablePush(){
   if (DEMO){ store.set("demoPush", false); return rerenderTab(); }
-  store.set("pushOn", false);
+  store.set("pushOn", false); store.set("pushOptOut", true);
   try { await api.savePush(null); const sub = await currentSub(); await sub?.unsubscribe(); } catch(e){ console.warn(e); }
   toast("Notifications are off"); rerenderTab();
 }
@@ -2163,6 +2181,7 @@ const subJSON = sub => { const j = sub.toJSON(); return { endpoint: j.endpoint, 
 async function saveSubEverywhere(sub){ await api.savePush(subJSON(sub)); store.set("pushSaved:" + S.cid, sub.endpoint); }
 // keep this group's copy of my notification address up to date (runs when a group opens)
 async function syncPush(){
+  autoPush();
   if (DEMO || notifState() !== "on") return;
   try { const sub = await currentSub(); if (!sub){ store.set("pushOn", false); return; } if (store.get("pushSaved:" + S.cid, "") !== sub.endpoint) await saveSubEverywhere(sub); } catch(e){ console.warn(e); }
 }
