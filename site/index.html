@@ -162,6 +162,7 @@ main{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;min-height:0}
 .room-row.unread .p{color:var(--ink);font-weight:650}
 .room-row.unread .when{color:var(--accent);font-weight:800}
 .room-row.unread .avatar,.room-row.unread .brandmark{box-shadow:0 0 0 3px var(--card),0 0 0 5px var(--accent)}
+.nh-head{display:flex;align-items:center;gap:10px;margin-bottom:4px}.nh-head h3{margin:0}.nh-bell{font-size:26px}.nh-steps{margin:8px 0 12px;padding-left:22px;line-height:1.6}.nh-steps li{margin:6px 0}.nh-ico{display:inline-block;padding:0 5px;border:1px solid var(--line);border-radius:6px}.nh-actions{display:flex;flex-direction:column;gap:8px;margin-top:10px}.nh-actions .btn{width:100%;text-align:center}
 .push-who{margin-top:12px;padding-top:12px;border-top:1px solid var(--line);font-size:14px}.push-who:empty{display:none}.pw-off{margin-top:4px;color:var(--danger);font-weight:600}
 .room-row .ud{width:12px;height:12px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 4px color-mix(in srgb,var(--accent) 20%,transparent)}
 .room-row .ub{min-width:26px;height:26px;padding:0 8px;border-radius:999px;background:var(--accent);color:#fff;font-size:13px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;box-shadow:0 4px 10px -3px color-mix(in srgb,var(--accent) 70%,transparent)}
@@ -1530,7 +1531,7 @@ const handlers = {
       leaveChurch(); store.set("lastGroup", null); renderHome(); return;
     }
     if (m.role === "member" || m.role === "leader"){
-      autoPush();
+      autoPush(); maybeNotifPopup();
       if (prev !== m.role || $("#scrMain").classList.contains("hidden")){
         show("scrMain");
         $("#tabManage").classList.toggle("hidden", m.role !== "leader");
@@ -1752,6 +1753,7 @@ function renderChats(){
   };
   const st = notifState();
   $("#vChats").innerHTML =
+    (st === "blocked" || st === "unsupported" ? `<div class="push-tip"><span>🔕</span><div><b>Notifications are off on this phone.</b> You won't know when someone messages you.<br><button class="link-btn" data-act="notifHelp" style="padding:4px 0;color:var(--accent);font-weight:700">Turn them on →</button></div></div>` : "") +
     (st === "install" ? `<div class="push-tip"><span>📲</span><div><b>Get notifications on iPhone:</b> add Gather to your Home Screen (Share → Add to Home Screen) and open it from there. Notifications turn on by themselves.<br><a class="link-btn" href="download.html" style="padding:4px 0;color:var(--accent);font-weight:700">Show me how</a></div></div>` : "") +
     (st === "off" && !store.get("hidePushTip", false) ? `<div class="push-tip"><span>🔔</span><div><b>Turn on notifications</b> so you know when someone messages you.<br><button class="link-btn" data-act="pushOn" style="padding:4px 0;color:var(--accent);font-weight:700">Turn on</button> · <button class="link-btn" data-act="hidePushTip" style="padding:4px 0">Not now</button></div></div>` : "") +
     (main ? hero(main) : "") +
@@ -1831,7 +1833,9 @@ function markRead(){
   if (!newest || newest <= Math.max(r.reads?.[S.user.uid] || 0, lastMarked[r.id] || 0)) return;
   lastMarked[r.id] = Date.now(); api.markRead(r.id);
 }
-document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible"){ markRead(); if (S.cid) syncPush(); } });
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible"){ markRead(); if (S.cid) syncPush();
+  // came back from the phone's Settings with notifications now allowed → finish turning them on
+  if (!DEMO && document.querySelector(".sheet-bg.nh") && pushSupported() && Notification.permission === "granted"){ document.querySelector(".sheet-bg.nh").remove(); enablePush(); } } });
 function renderRoomHeader(){
   const r = S.rooms[S.room]; if (!r) return;
   const count = r.type === "main" ? Object.values(S.members).filter(m => m.role === "member" || m.role === "leader").length : r.members.length;
@@ -2140,6 +2144,63 @@ function notifState(){
   if (Notification.permission === "denied") return "blocked";
   return Notification.permission === "granted" && store.get("pushOn", false) ? "on" : "off";
 }
+// ---- "Notifications are off" popup with steps for this exact phone ----
+const isAndroid = /Android/i.test(navigator.userAgent);
+const isSamsungNet = /SamsungBrowser/i.test(navigator.userAgent);
+const inAppBrowser = /KAKAOTALK|Instagram|FBAN|FBAV|Line\/|NAVER|wv\)/i.test(navigator.userAgent);
+const steps = a => `<ol class="nh-steps">${a.map(x => `<li>${x}</li>`).join("")}</ol>`;
+function notifHelpHTML(st){
+  const app = esc(APP_NAME), site = location.host;
+  if (st === "blocked"){
+    if (isIOS) return `<p>Notifications for ${app} are turned off on this iPhone. Turn them back on in Settings:</p>` +
+      steps([`Open the <b>Settings</b> app`, `Tap <b>Notifications</b>`, `Find and tap <b>${app}</b>`, `Turn on <b>Allow Notifications</b>`, `Come back here and tap <b>I turned it on</b>`]);
+    if (isAndroid && isStandalone()) return `<p>Notifications for ${app} are turned off on this phone. Turn them back on:</p>` +
+      steps([`Press and hold the <b>${app}</b> icon on your Home Screen`, `Tap <b>ⓘ App info</b>`, `Tap <b>Notifications</b> and turn them <b>on</b>`, `Come back here and tap <b>I turned it on</b>`]) +
+      `<p class="hint">Or: Settings → Notifications → App notifications → ${app} (or Chrome) → On.</p>`;
+    if (isSamsungNet) return `<p>Samsung Internet is blocking notifications for this site:</p>` +
+      steps([`Tap <b>≡</b> (bottom right) → <b>Settings</b>`, `Tap <b>Sites and downloads</b> → <b>Notifications</b>`, `Find <b>${esc(site)}</b> and set it to <b>Allow</b>`, `Come back here and tap <b>I turned it on</b>`]);
+    return `<p>Your browser is blocking notifications for this site:</p>` +
+      steps([`Tap the <b>🔒 lock</b> (or ⓘ) next to the address at the top`, `Tap <b>Permissions</b> → <b>Notifications</b>`, `Choose <b>Allow</b>`, `Come back here and tap <b>I turned it on</b>`]) +
+      `<p class="hint">Or: Chrome ⋮ → Settings → Site settings → Notifications → ${esc(site)} → Allow.</p>`;
+  }
+  if (st === "install") return `<p>iPhone only sends notifications to apps on the Home Screen. It takes 10 seconds:</p>` +
+    steps([`Tap the <b>Share</b> button <span class="nh-ico">⬆︎</span> at the bottom of Safari`, `Scroll down and tap <b>Add to Home Screen</b>`, `Tap <b>Add</b>`, `Open <b>${app}</b> from your Home Screen and tap <b>Allow</b> when asked`]);
+  if (st === "unsupported") return inAppBrowser
+    ? `<p>This page is open inside another app (like KakaoTalk or Instagram), which can't show notifications.</p>` +
+      (isAndroid ? `<a class="btn accent" href="intent://${esc(site)}${esc(location.pathname)}#Intent;scheme=https;package=com.android.chrome;end">Open in Chrome</a>`
+                 : steps([`Tap <b>⋯</b> or the share button`, `Choose <b>Open in Safari</b>`, `Then add ${app} to your Home Screen`]))
+    : `<p>This browser can't show notifications. ${isIOS ? "Open this page in <b>Safari</b> and add it to your Home Screen." : "Open this page in <b>Chrome</b>."}</p>`;
+  return `<p>Get a notification when someone messages you or a leader posts something. It only says who sent it — never the message.</p>`;
+}
+function openNotifHelp(force = false){
+  if (DEMO && !force) return;
+  const st = DEMO ? "blocked" : notifState();
+  if (st === "on") return toast("Notifications are on ✅");
+  document.querySelector(".sheet-bg.nh")?.remove();
+  const bg = sheet(`<div class="nh-head"><span class="nh-bell">🔔</span><h3>Turn on notifications</h3></div>
+    ${notifHelpHTML(st)}
+    <div class="nh-actions">
+      ${st === "off" ? `<button class="btn accent" data-nh="allow">Turn on notifications</button>` : ""}
+      ${st === "blocked" ? `<button class="btn accent" data-nh="recheck">I turned it on</button>` : ""}
+      ${st === "install" ? `<a class="btn secondary" href="download.html">Show me with pictures</a>` : ""}
+      <button class="btn secondary" data-nh="later">Not now</button>
+    </div>`);
+  bg.classList.add("nh");
+  bg.addEventListener("click", async e => {
+    const a = e.target.closest("[data-nh]")?.dataset.nh; if (!a) return;
+    if (a === "later"){ try { sessionStorage.setItem("nhShown", "1"); } catch {} bg.remove(); }
+    if (a === "allow"){ bg.remove(); await enablePush(); if (notifState() === "blocked") openNotifHelp(); }
+    if (a === "recheck"){ bg.remove(); if (Notification.permission === "granted"){ await enablePush(); } else { toast("Still off. Follow the steps, then try again."); openNotifHelp(); } }
+  });
+}
+// once per app session, right after a member opens the group: pop up if this phone won't get notifications
+function maybeNotifPopup(){
+  if (DEMO || !S.cid || !["member", "leader"].includes(S.me?.role)) return;
+  const st = notifState();
+  if (st === "on" || (st === "off" && store.get("pushOptOut", false))) return;
+  try { if (sessionStorage.getItem("nhShown")) return; sessionStorage.setItem("nhShown", "1"); } catch {}
+  setTimeout(() => { if (notifState() !== "on" && !document.querySelector(".sheet-bg")) openNotifHelp(); }, 2500);
+}
 // Notifications turn themselves on: if this phone already allows them, silently; otherwise the phone's
 // "Allow notifications?" question pops up on the first tap anywhere in the app (phones only allow asking after a tap).
 let autoArmed = false;
@@ -2193,7 +2254,7 @@ function notifCard(){
     install: "On iPhone, notifications work once Gather is on your Home Screen. Open this page in Safari → Share → Add to Home Screen, then open it from there.",
     unsupported: "This browser can't show notifications. Try Chrome, or add the app to your Home Screen." }[st];
   return `<div class="card notif-card"><div style="font-weight:700">🔔 Notifications · ${st === "on" ? "On" : "Off"}</div><p class="hint" style="margin:6px 0 0">${msg}</p>
-    ${st === "on" ? `<div class="row"><button class="btn secondary" data-act="pushTest">Send me a test</button><button class="btn secondary" data-act="pushOff">Turn off</button></div>` : st === "off" ? `<div class="row"><button class="btn accent" data-act="pushOn">Turn on notifications</button></div>` : st === "install" ? `<div class="row"><a class="btn secondary" href="download.html">Show me how</a></div>` : ""}
+    ${st === "on" ? `<div class="row"><button class="btn secondary" data-act="pushTest">Send me a test</button><button class="btn secondary" data-act="pushOff">Turn off</button></div>` : st === "off" ? `<div class="row"><button class="btn accent" data-act="pushOn">Turn on notifications</button></div>` : st === "install" || st === "blocked" || st === "unsupported" ? `<div class="row"><button class="btn accent" data-act="notifHelp">How to turn them on</button></div>` : ""}
     <div id="pushWho" class="push-who"></div></div>`;
 }
 // Who will actually get a notification: people only get one on phones where they turned notifications on in this group.
@@ -2389,6 +2450,7 @@ document.addEventListener("click", async e => {
     if (act === "leaveChurch") leaveChurchFlow();
     if (act === "deleteChurch") deleteChurchFlow();
     if (act === "pushOn") enablePush();
+    if (act === "notifHelp") openNotifHelp(true);
     if (act === "pushOff") disablePush();
     if (act === "pushTest") pushTest();
     if (act === "hidePushTip"){ store.set("hidePushTip", true); renderChats(); }
